@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sumora - AI Video Summarizer</title>
+    <style>
+        /* Reset and base styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #000;
+            color: #fff;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 100px 0;
+            background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
+        }
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #8a2be2, #4169e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero p {
+            font-size: 1.5rem;
+            margin-bottom: 40px;
+            opacity: 0.9;
+        }
+        .input-group {
+            max-width: 600px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .input-group input {
+            padding: 15px;
+            font-size: 1rem;
+            border: none;
+            border-radius: 8px;
+            background-color: #333;
+            color: #fff;
+            outline: none;
+        }
+        .input-group input::placeholder {
+            color: #ccc;
+        }
+        .btn {
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            background: linear-gradient(45deg, #8a2be2, #4169e1);
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        .btn:hover {
+            transform: scale(1.05);
+        }
+        /* Features Section */
+        .features {
+            padding: 80px 0;
+            background-color: #111;
+        }
+        .features h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 50px;
+            background: linear-gradient(45deg, #8a2be2, #4169e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 40px;
+        }
+        .feature {
+            text-align: center;
+            padding: 20px;
+            background-color: #222;
+            border-radius: 8px;
+            transition: transform 0.3s ease;
+        }
+        .feature:hover {
+            transform: translateY(-10px);
+        }
+        .feature h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+            color: #8a2be2;
+        }
+        .feature p {
+            opacity: 0.8;
+        }
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px 0;
+            background-color: #000;
+            border-top: 1px solid #333;
+        }
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2rem;
+            }
+            .hero p {
+                font-size: 1.2rem;
+            }
+            .input-group {
+                flex-direction: column;
+            }
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <div class="container">
+            <h1>Sumora</h1>
+            <p>Summarize Any Video in Seconds</p>
+            <div class="input-group">
+                <input type="text" id="video-link" placeholder="Paste your video link here...">
+                <button class="btn" id="summarize-btn">Summarize</button>
+            </div>
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="container">
+            <h2>Why Choose Sumora?</h2>
+            <div class="features-grid">
+                <div class="feature">
+                    <h3>Fast</h3>
+                    <p>Get summaries in seconds, not minutes. Our AI processes videos quickly to save you time.</p>
+                </div>
+                <div class="feature">
+                    <h3>Accurate</h3>
+                    <p>Powered by advanced AI, our summaries capture the key points with high precision.</p>
+                </div>
+                <div class="feature">
+                    <h3>AI Powered</h3>
+                    <p>Leveraging cutting-edge machine learning to understand and condense video content effortlessly.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Sumora. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script>
+        // Simple JavaScript for the summarize button
+        document.getElementById('summarize-btn').addEventListener('click', function() {
+            const link = document.getElementById('video-link').value;
+            if (link.trim() === '') {
+                alert('Please paste a video link first!');
+            } else {
+                alert('Summarizing video: ' + link + '\n(This is a demo. In a real app, this would process the video.)');
+            }
+        });
+    </script>
+</body>
+</html>
