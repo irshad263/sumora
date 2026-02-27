@@ -17,6 +17,36 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
+// ─── RATE LIMITER (In-Memory, 3 requests/day per IP) ──────
+const rateLimitMap = new Map();
+const DAILY_LIMIT = 3;
+
+function getToday() {
+  return new Date().toISOString().slice(0, 10); // "2026-02-27"
+}
+
+function getClientIP(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  return forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress;
+}
+
+function checkRateLimit(ip) {
+  const today = getToday();
+  const key = `${ip}__${today}`;
+
+  // Clean old entries (different day)
+  for (const [k] of rateLimitMap) {
+    if (!k.endsWith(today)) rateLimitMap.delete(k);
+  }
+
+  const count = rateLimitMap.get(key) || 0;
+
+  if (count >= DAILY_LIMIT) return false;
+
+  rateLimitMap.set(key, count + 1);
+  return true;
+}
+
 // ─── HELPER: Extract YouTube Video ID ─────────────────────
 function extractVideoId(url) {
   const regex = /(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
@@ -37,7 +67,6 @@ async function fetchTranscript(videoId) {
 }
 
 // ─── HELPER: Fetch Title & Channel via YouTube oEmbed ─────
-// No API key needed - YouTube's free public oEmbed endpoint
 function fetchVideoInfo(videoId) {
   return new Promise((resolve) => {
     const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
@@ -100,6 +129,18 @@ ${transcript.slice(0, 8000)}`;
 
 // ─── MAIN ROUTE: POST /api/summarize ──────────────────────
 app.post("/api/summarize", async (req, res) => {
+  // ── Rate Limit Check ──
+  const clientIP = getClientIP(req);
+  const allowed = checkRateLimit(clientIP);
+
+  if (!allowed) {
+    return res.status(429).json({
+      success: false,
+      error: "Daily free limit reached. Please try again tomorrow."
+    });
+  }
+
+  // ── API Key Check ──
   if (!GEMINI_API_KEY) {
     return res.status(500).json({
       success: false,
