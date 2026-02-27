@@ -6,15 +6,11 @@ const { Innertube } = require("youtubei.js");
 
 // ─── CONFIG ───────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
-if (!GEMINI_API_KEY) {
-  console.error("GEMINI_API_KEY is not set in environment variables.");
-  process.exit(1);
-}
 const PORT = process.env.PORT || 5000;
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+if (!GEMINI_API_KEY) {
+  console.warn("WARNING: GEMINI_API_KEY is not set in environment variables. Summarize route will not work.");
+}
 
 const app = express();
 app.use(cors());
@@ -54,6 +50,9 @@ async function fetchVideoInfo(videoId) {
 
 // ─── HELPER: Generate Summary via Gemini ──────────────────
 async function generateSummary(transcript, language, summaryType) {
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi" ? "Respond entirely in Hindi language." : "Respond in English.";
 
@@ -85,9 +84,16 @@ ${transcript.slice(0, 8000)}`;
 
 // ─── MAIN ROUTE: POST /api/summarize ──────────────────────
 app.post("/api/summarize", async (req, res) => {
+  // Check API key inside route
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({
+      success: false,
+      error: "Server configuration error. GEMINI_API_KEY is not set."
+    });
+  }
+
   const { videoUrl, language = "English", summaryType = "short" } = req.body;
 
-  // Validate URL
   if (!videoUrl) {
     return res.status(400).json({ success: false, error: "Video URL is required." });
   }
@@ -104,7 +110,6 @@ app.post("/api/summarize", async (req, res) => {
       fetchVideoInfo(videoId)
     ]);
 
-    // Check transcript
     if (!transcript) {
       return res.status(404).json({
         success: false,
@@ -112,7 +117,6 @@ app.post("/api/summarize", async (req, res) => {
       });
     }
 
-    // Generate summary
     const summary = await generateSummary(transcript, language, summaryType);
 
     return res.json({
@@ -129,6 +133,11 @@ app.post("/api/summarize", async (req, res) => {
       error: "Something went wrong on our end. Please try again."
     });
   }
+});
+
+// ─── HEALTH CHECK ──────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.send("Sumora Backend Running!");
 });
 
 // ─── START SERVER ──────────────────────────────────────────
