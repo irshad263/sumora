@@ -1,21 +1,21 @@
 const express = require("express");
 const cors = require("cors");
+const https = require("https");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { YoutubeTranscript } = require("youtube-transcript");
-const { Innertube } = require("youtubei.js");
 
 // ─── CONFIG ───────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 5000;
 
 if (!GEMINI_API_KEY) {
-  console.warn("WARNING: GEMINI_API_KEY is not set in environment variables. Summarize route will not work.");
+  console.warn("WARNING: GEMINI_API_KEY is not set. Summarize route will not work.");
 }
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // Serve frontend from /public folder
+app.use(express.static("public"));
 
 // ─── HELPER: Extract YouTube Video ID ─────────────────────
 function extractVideoId(url) {
@@ -31,21 +31,35 @@ async function fetchTranscript(videoId) {
     if (!transcriptData || transcriptData.length === 0) return null;
     return transcriptData.map(item => item.text).join(" ");
   } catch (err) {
+    console.error("Transcript error:", err.message);
     return null;
   }
 }
 
-// ─── HELPER: Fetch Title & Channel ────────────────────────
-async function fetchVideoInfo(videoId) {
-  try {
-    const yt = await Innertube.create({ generate_session_locally: true });
-    const info = await yt.getInfo(videoId);
-    const title = info.basic_info?.title || "Unknown Title";
-    const channel = info.basic_info?.channel?.name || "Unknown Channel";
-    return { title, channel };
-  } catch (err) {
-    return { title: "YouTube Video", channel: "Unknown Channel" };
-  }
+// ─── HELPER: Fetch Title & Channel via YouTube oEmbed ─────
+// No API key needed - YouTube's free public oEmbed endpoint
+function fetchVideoInfo(videoId) {
+  return new Promise((resolve) => {
+    const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+
+    https.get(url, (res) => {
+      let data = "";
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          resolve({
+            title: json.title || "YouTube Video",
+            channel: json.author_name || "Unknown Channel"
+          });
+        } catch {
+          resolve({ title: "YouTube Video", channel: "Unknown Channel" });
+        }
+      });
+    }).on("error", () => {
+      resolve({ title: "YouTube Video", channel: "Unknown Channel" });
+    });
+  });
 }
 
 // ─── HELPER: Generate Summary via Gemini ──────────────────
@@ -54,7 +68,9 @@ async function generateSummary(transcript, language, summaryType) {
   const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
   const isDetailed = summaryType === "detailed";
-  const langNote = language === "Hindi" ? "Respond entirely in Hindi language." : "Respond in English.";
+  const langNote = language === "Hindi"
+    ? "Respond entirely in Hindi language."
+    : "Respond in English.";
 
   const prompt = isDetailed
     ? `You are an expert summarizer. ${langNote}
@@ -84,7 +100,6 @@ ${transcript.slice(0, 8000)}`;
 
 // ─── MAIN ROUTE: POST /api/summarize ──────────────────────
 app.post("/api/summarize", async (req, res) => {
-  // Check API key inside route
   if (!GEMINI_API_KEY) {
     return res.status(500).json({
       success: false,
@@ -104,7 +119,7 @@ app.post("/api/summarize", async (req, res) => {
   }
 
   try {
-    // Fetch transcript + video info in parallel for speed
+    // Fetch transcript + video info in parallel
     const [transcript, videoInfo] = await Promise.all([
       fetchTranscript(videoId),
       fetchVideoInfo(videoId)
@@ -113,7 +128,7 @@ app.post("/api/summarize", async (req, res) => {
     if (!transcript) {
       return res.status(404).json({
         success: false,
-        error: "Transcript not available for this video. The video may have subtitles disabled or be restricted."
+        error: "Transcript not available for this video. Try a video with subtitles enabled."
       });
     }
 
@@ -130,7 +145,7 @@ app.post("/api/summarize", async (req, res) => {
     console.error("Server error:", err.message);
     return res.status(500).json({
       success: false,
-      error: "Something went wrong on our end. Please try again."
+      error: "Something went wrong. Please try again."
     });
   }
 });
