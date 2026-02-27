@@ -131,11 +131,6 @@ app.post("/api/summarize", async (req, res) => {
   }
 });
 
-// ─── HEALTH CHECK ──────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.send("Sumora Backend Running!");
-});
-
 // ─── START SERVER ──────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`Sumora server running on port ${PORT}`);
