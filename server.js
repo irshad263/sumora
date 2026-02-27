@@ -5,7 +5,12 @@ const { YoutubeTranscript } = require("youtube-transcript");
 const { Innertube } = require("youtubei.js");
 
 // ─── CONFIG ───────────────────────────────────────────────
-const GEMINI_API_KEY = "AIzaSyA5ZH06B4pyPTvczxiW-5r23wNtam5YCi4";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+  console.error("GEMINI_API_KEY is not set in environment variables.");
+  process.exit(1);
+}
 const PORT = process.env.PORT || 5000;
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
