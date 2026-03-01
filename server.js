@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const https = require("https");
+const helmet = require("helmet");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { YoutubeTranscript } = require("youtube-transcript");
 
@@ -13,6 +14,7 @@ if (!GEMINI_API_KEY) {
 }
 
 const app = express();
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
@@ -20,6 +22,30 @@ app.use(express.static("public"));
 // ─── RATE LIMITER (In-Memory, 3 requests/day per IP) ──────
 const rateLimitMap = new Map();
 const DAILY_LIMIT = 3;
+
+// ─── SUMMARY CACHE (In-Memory) ────────────────────────────
+const summaryCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
+const MAX_CACHE_ENTRIES = 500;
+
+// Auto-cleanup expired cache every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of summaryCache) {
+    if (now - val.createdAt > CACHE_TTL) {
+      summaryCache.delete(key);
+    }
+  }
+}, 30 * 60 * 1000);
+
+// ─── ANALYTICS (In-Memory) ────────────────────────────────
+const analytics = {
+  totalRequests: 0,
+  cacheHits: 0,
+  transcriptFails: 0,
+  geminiFails: 0,
+  successfulSummaries: 0
+};
 
 function getToday() {
   return new Date().toISOString().slice(0, 10); // "2026-02-27"
@@ -30,7 +56,7 @@ function getClientIP(req) {
   return forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress;
 }
 
-function checkRateLimit(ip) {
+function isLimitReached(ip) {
   const today = getToday();
   const key = `${ip}__${today}`;
 
@@ -40,11 +66,21 @@ function checkRateLimit(ip) {
   }
 
   const count = rateLimitMap.get(key) || 0;
+  return count >= DAILY_LIMIT;
+}
 
-  if (count >= DAILY_LIMIT) return false;
-
+function incrementUsage(ip) {
+  const today = getToday();
+  const key = `${ip}__${today}`;
+  const count = rateLimitMap.get(key) || 0;
   rateLimitMap.set(key, count + 1);
-  return true;
+}
+
+// ─── HELPER: Get Current Usage Count ─────────────────────
+function getUsageCount(ip) {
+  const today = getToday();
+  const key = `${ip}__${today}`;
+  return rateLimitMap.get(key) || 0;
 }
 
 // ─── HELPER: Extract YouTube Video ID ─────────────────────
@@ -54,10 +90,14 @@ function extractVideoId(url) {
   return match ? match[1] : null;
 }
 
-// ─── HELPER: Fetch Transcript ──────────────────────────────
+// ─── HELPER: Fetch Transcript (10s timeout) ───────────────
 async function fetchTranscript(videoId) {
   try {
-    const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("TIMEOUT")), 10000)
+    );
+    const transcriptPromise = YoutubeTranscript.fetchTranscript(videoId);
+    const transcriptData = await Promise.race([transcriptPromise, timeoutPromise]);
     if (!transcriptData || transcriptData.length === 0) return null;
     return transcriptData.map(item => item.text).join(" ");
   } catch (err) {
@@ -91,7 +131,7 @@ function fetchVideoInfo(videoId) {
   });
 }
 
-// ─── HELPER: Generate Summary via Gemini ──────────────────
+// ─── HELPER: Generate Summary via Gemini (15s timeout) ────
 async function generateSummary(transcript, language, summaryType) {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
@@ -120,23 +160,31 @@ Provide a SHORT summary of this YouTube video transcript with:
 Transcript:
 ${transcript.slice(0, 8000)}`;
 
-  const result = await model.generateContent({
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("TIMEOUT")), 15000)
+  );
+  const geminiPromise = model.generateContent({
     contents: [{ parts: [{ text: prompt }] }]
   });
 
+  const result = await Promise.race([geminiPromise, timeoutPromise]);
   return result.response.text();
 }
 
 // ─── MAIN ROUTE: POST /api/summarize ──────────────────────
 app.post("/api/summarize", async (req, res) => {
+  // ── Analytics ──
+  analytics.totalRequests++;
+
   // ── Rate Limit Check ──
   const clientIP = getClientIP(req);
-  const allowed = checkRateLimit(clientIP);
 
-  if (!allowed) {
+  if (isLimitReached(clientIP)) {
     return res.status(429).json({
       success: false,
-      error: "Daily free limit reached. Please try again tomorrow."
+      code: "rate_limit",
+      error: "Daily free limit reached. Please try again tomorrow.",
+      usage: { used: DAILY_LIMIT, limit: DAILY_LIMIT }
     });
   }
 
@@ -167,33 +215,115 @@ app.post("/api/summarize", async (req, res) => {
     ]);
 
     if (!transcript) {
+      analytics.transcriptFails++;
       return res.status(404).json({
         success: false,
+        code: "transcript_unavailable",
         error: "Transcript not available for this video. Try a video with subtitles enabled."
       });
     }
 
+    // ── Cache Check ──
+    const cacheKey = `${videoId}_${language}_${summaryType}`;
+    const cached = summaryCache.get(cacheKey);
+
+    if (cached) {
+      // Check if cache is expired
+      if (Date.now() - cached.createdAt > CACHE_TTL) {
+        summaryCache.delete(cacheKey);
+      } else {
+        // Valid cache - return without incrementing usage
+        analytics.cacheHits++;
+        const usedNow = getUsageCount(clientIP);
+        return res.json({
+          success: true,
+          summary: cached.summary,
+          title: cached.title,
+          channel: cached.channel,
+          usage: { used: usedNow, limit: DAILY_LIMIT },
+          fromCache: true
+        });
+      }
+    }
+
     const summary = await generateSummary(transcript, language, summaryType);
+
+    // ── FIFO eviction if cache is full ──
+    if (summaryCache.size >= MAX_CACHE_ENTRIES) {
+      const oldestKey = summaryCache.keys().next().value;
+      summaryCache.delete(oldestKey);
+    }
+
+    // ── Store in cache with timestamp ──
+    summaryCache.set(cacheKey, {
+      summary,
+      title: videoInfo.title,
+      channel: videoInfo.channel,
+      createdAt: Date.now()
+    });
+
+    // ── Increment only on success ──
+    analytics.successfulSummaries++;
+    incrementUsage(clientIP);
+    const usedAfter = getUsageCount(clientIP);
 
     return res.json({
       success: true,
       summary,
       title: videoInfo.title,
-      channel: videoInfo.channel
+      channel: videoInfo.channel,
+      usage: { used: usedAfter, limit: DAILY_LIMIT }
     });
 
   } catch (err) {
     console.error("Server error:", err.message);
+
+    if (err.message === "TIMEOUT") {
+      analytics.geminiFails++;
+      return res.status(504).json({
+        success: false,
+        code: "gemini_failed",
+        error: "Request timed out. Please try again."
+      });
+    }
+
+    analytics.geminiFails++;
     return res.status(500).json({
       success: false,
+      code: "server_error",
       error: "Something went wrong. Please try again."
     });
   }
 });
 
+// ─── USAGE ROUTE: GET /api/usage ─────────────────────────
+app.get("/api/usage", (req, res) => {
+  const clientIP = getClientIP(req);
+  const used = getUsageCount(clientIP);
+  return res.json({ used, limit: DAILY_LIMIT });
+});
+
+// ─── STATS ROUTE: GET /api/stats ─────────────────────────
+app.get("/api/stats", (req, res) => {
+  res.json({
+    ...analytics,
+    cacheSize: summaryCache.size,
+    activeIPs: rateLimitMap.size
+  });
+});
+
 // ─── HEALTH CHECK ──────────────────────────────────────────
 app.get("/", (req, res) => {
   res.send("Sumora Backend Running!");
+});
+
+// ─── GLOBAL ERROR HANDLERS ───────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err.message);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
 });
 
 // ─── START SERVER ──────────────────────────────────────────
