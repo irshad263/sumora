@@ -294,6 +294,18 @@
         .copy-btn.copied {
             background: linear-gradient(45deg, #28a745, #20c997);
         }
+
+        /* Usage Counter */
+        .usage-counter {
+            font-size: 0.8rem;
+            color: #888;
+            text-align: center;
+            margin-top: -8px;
+        }
+        .usage-counter span {
+            color: #aaa;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -327,6 +339,7 @@
                 </div>
 
                 <button class="btn" id="summarize-btn">Summarize</button>
+                <div class="usage-counter" id="usage-counter">Free Today: <span id="usage-text">0/3</span></div>
                 <div class="error-message" id="error-message"></div>
             </div>
         </div>
@@ -380,6 +393,17 @@
     </footer>
 
     <script>
+        // ---- USAGE COUNTER ----
+        function updateUsageDisplay(used, limit) {
+            document.getElementById("usage-text").textContent = used + "/" + limit;
+        }
+
+        // Fetch usage on page load
+        fetch("/api/usage")
+            .then(res => res.json())
+            .then(data => updateUsageDisplay(data.used, data.limit))
+            .catch(() => {}); // Silently fail if offline
+
         // ---- HELPER FUNCTIONS ----
 
         function getYouTubeID(url) {
@@ -509,11 +533,16 @@
                     document.getElementById("video-channel").textContent = data.channel || "YouTube";
                     document.getElementById("summary-text").textContent = data.summary;
 
+                    // Update usage counter
+                    if (data.usage) updateUsageDisplay(data.usage.used, data.usage.limit);
+
                     const resultSection = document.getElementById("result-section");
                     resultSection.style.display = "block";
                     resultSection.scrollIntoView({ behavior: "smooth" });
 
                 } else {
+                    // Update usage if limit hit
+                    if (data.usage) updateUsageDisplay(data.usage.used, data.usage.limit);
                     showError(data.error || "Something went wrong. Please try again.");
                 }
 
@@ -553,4 +582,4 @@
     </script>
 
 </body>
-  </html>
+</html>
