@@ -14,7 +14,9 @@ if (!GEMINI_API_KEY) {
 }
 
 const app = express();
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false
+}));
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
