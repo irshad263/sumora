@@ -134,8 +134,9 @@ YouTube URL: ${videoUrl}`;
     setTimeout(() => reject(new Error("TIMEOUT")), 30000)
   );
 
-  const geminiPromise = model.generateContent(prompt);
-
+  const geminiPromise = model.generateContent({
+  contents: [{ parts: [{ text: prompt }] }]
+});
   const result = await Promise.race([geminiPromise, timeoutPromise]);
   return result.response.text();
 }
