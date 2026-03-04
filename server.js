@@ -106,7 +106,7 @@ function fetchVideoInfo(videoId) {
 // ─── HELPER: Generate Summary via Gemini (Direct URL) ─────
 async function generateSummary(videoUrl, language, summaryType) {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi"
@@ -116,17 +116,52 @@ async function generateSummary(videoUrl, language, summaryType) {
   const prompt = isDetailed
     ? `You are an expert content summarizer. ${langNote}
 
-You are given a YouTube video URL. Based on the content available at this URL, provide a DETAILED summary with:
-1. Overview (4-5 sentences)
-2. Key Points (at least 7 bullet points)
-3. Conclusion (2-3 sentences)
+You are given a YouTube video URL. Based on the content available at this URL, provide a DETAILED summary in this exact format using plain text only, no emojis:
+
+Detailed Video Summary
+
+Overview
+Write 4-5 sentences summarizing the video.
+
+Key Moments
+00:00 - Topic 1
+01:30 - Topic 2
+03:00 - Topic 3
+05:00 - Topic 4
+
+Key Points
+- Point 1
+- Point 2
+- Point 3
+- Point 4
+- Point 5
+- Point 6
+- Point 7
+
+Conclusion
+Write 2-3 sentences concluding the video.
 
 YouTube URL: ${videoUrl}`
     : `You are an expert content summarizer. ${langNote}
 
-You are given a YouTube video URL. Based on the content available at this URL, provide a SHORT summary with:
-1. Brief Overview (2-3 sentences)
-2. Key Points (4-5 bullet points)
+You are given a YouTube video URL. Based on the content available at this URL, provide a SHORT summary in this exact format using plain text only, no emojis:
+
+Video Summary
+
+Overview
+Write 2-3 sentences summarizing the video.
+
+Key Moments
+00:00 - Topic 1
+01:20 - Topic 2
+02:45 - Topic 3
+04:10 - Topic 4
+
+Key Points
+- Point 1
+- Point 2
+- Point 3
+- Point 4
 
 YouTube URL: ${videoUrl}`;
 
@@ -135,8 +170,13 @@ YouTube URL: ${videoUrl}`;
   );
 
   const geminiPromise = model.generateContent({
-  contents: [{ parts: [{ text: prompt }] }]
-});
+    contents: [
+      {
+        parts: [{ text: prompt }]
+      }
+    ]
+  });
+
   const result = await Promise.race([geminiPromise, timeoutPromise]);
   return result.response.text();
 }
