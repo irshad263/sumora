@@ -317,6 +317,6 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // ─── START SERVER ──────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Sumora server running on port ${PORT}`);
 });
