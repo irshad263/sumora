@@ -106,7 +106,7 @@ function fetchVideoInfo(videoId) {
 // ─── HELPER: Generate Summary via Gemini (Direct URL) ─────
 async function generateSummary(videoUrl, language, summaryType) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi"
