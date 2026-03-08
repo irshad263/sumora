@@ -2,14 +2,14 @@ const express = require("express");
 const cors = require("cors");
 const https = require("https");
 const helmet = require("helmet");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 
 // ─── CONFIG ───────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 5000;
 
 if (!GEMINI_API_KEY) {
-  console.warn("WARNING: GEMINI_API_KEY is not set. Summarize route will not work.");
+  console.warn("WARNING: GEMINI_API_KEY is not set.");
 }
 
 const app = express();
@@ -27,7 +27,6 @@ const summaryCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 
-// Auto-cleanup expired cache every 30 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [key, val] of summaryCache) {
@@ -103,10 +102,9 @@ function fetchVideoInfo(videoId) {
   });
 }
 
-// ─── HELPER: Generate Summary via Gemini (Direct URL) ─────
+// ─── HELPER: Generate Summary via Gemini ──────────────────
 async function generateSummary(videoUrl, language, summaryType) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi"
@@ -169,17 +167,13 @@ YouTube URL: ${videoUrl}`;
     setTimeout(() => reject(new Error("TIMEOUT")), 30000)
   );
 
-  const geminiPromise = model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }]
-      }
-    ]
+  const geminiPromise = ai.models.generateContent({
+    model: "gemini-1.5-flash",
+    contents: prompt
   });
 
   const result = await Promise.race([geminiPromise, timeoutPromise]);
-  return result.response.text();
+  return result.text;
 }
 
 // ─── MAIN ROUTE: POST /api/summarize ──────────────────────
@@ -237,19 +231,16 @@ app.post("/api/summarize", async (req, res) => {
   }
 
   try {
-    // Fetch video info + summary in parallel
     const [summary, videoInfo] = await Promise.all([
       generateSummary(videoUrl, language, summaryType),
       fetchVideoInfo(videoId)
     ]);
 
-    // ── FIFO eviction if cache is full ──
     if (summaryCache.size >= MAX_CACHE_ENTRIES) {
       const oldestKey = summaryCache.keys().next().value;
       summaryCache.delete(oldestKey);
     }
 
-    // ── Store in cache ──
     summaryCache.set(cacheKey, {
       summary,
       title: videoInfo.title,
@@ -257,7 +248,6 @@ app.post("/api/summarize", async (req, res) => {
       createdAt: Date.now()
     });
 
-    // ── Increment only on success ──
     analytics.successfulSummaries++;
     incrementUsage(clientIP);
     const usedAfter = getUsageCount(clientIP);
@@ -320,4 +310,3 @@ process.on("unhandledRejection", (reason) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Sumora server running on port ${PORT}`);
 });
-
