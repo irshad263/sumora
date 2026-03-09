@@ -7,6 +7,9 @@ const helmet = require("helmet");
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 5000;
 
+// !! APNA CLOUDFLARE WORKER URL YAHAN DAALO !!
+const CLOUDFLARE_WORKER_URL = "https://sumora.tradermulk77.workers.dev";
+
 if (!GEMINI_API_KEY) {
   console.warn("WARNING: GEMINI_API_KEY is not set.");
 }
@@ -37,6 +40,7 @@ setInterval(() => {
 const analytics = {
   totalRequests: 0,
   cacheHits: 0,
+  transcriptFails: 0,
   geminiFails: 0,
   successfulSummaries: 0
 };
@@ -60,14 +64,12 @@ function isLimitReached(ip) {
 }
 
 function incrementUsage(ip) {
-  const today = getToday();
-  const key = `${ip}__${today}`;
+  const key = `${ip}__${getToday()}`;
   rateLimitMap.set(key, (rateLimitMap.get(key) || 0) + 1);
 }
 
 function getUsageCount(ip) {
-  const key = `${ip}__${getToday()}`;
-  return rateLimitMap.get(key) || 0;
+  return rateLimitMap.get(`${ip}__${getToday()}`) || 0;
 }
 
 function extractVideoId(url) {
@@ -76,10 +78,49 @@ function extractVideoId(url) {
   return match ? match[1] : null;
 }
 
+// ─── FETCH TRANSCRIPT FROM CLOUDFLARE WORKER ──────────────
+function fetchTranscript(videoId) {
+  return new Promise((resolve) => {
+    const workerUrl = new URL(CLOUDFLARE_WORKER_URL);
+    const options = {
+      hostname: workerUrl.hostname,
+      path: `/?videoId=${videoId}`,
+      method: "GET"
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.transcript && json.transcript.length > 50) {
+            resolve(json.transcript);
+          } else {
+            resolve(null);
+          }
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+
+    req.on("error", () => resolve(null));
+    req.setTimeout(12000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+// ─── FETCH VIDEO INFO VIA OEMBED ──────────────────────────
 function fetchVideoInfo(videoId) {
   return new Promise((resolve) => {
-    const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    https.get(url, (res) => {
+    const options = {
+      hostname: "www.youtube.com",
+      path: `/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+      method: "GET"
+    };
+
+    const req = https.request(options, (res) => {
       let data = "";
       res.on("data", chunk => data += chunk);
       res.on("end", () => {
@@ -90,13 +131,14 @@ function fetchVideoInfo(videoId) {
           resolve({ title: "YouTube Video", channel: "Unknown Channel" });
         }
       });
-    }).on("error", () => {
-      resolve({ title: "YouTube Video", channel: "Unknown Channel" });
     });
+
+    req.on("error", () => resolve({ title: "YouTube Video", channel: "Unknown Channel" }));
+    req.end();
   });
 }
 
-// ─── GEMINI DIRECT API CALL (No SDK) ──────────────────────
+// ─── CALL GEMINI DIRECT API ───────────────────────────────
 function callGemini(prompt) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
@@ -105,7 +147,7 @@ function callGemini(prompt) {
 
     const options = {
       hostname: "generativelanguage.googleapis.com",
-      path: `/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -120,7 +162,7 @@ function callGemini(prompt) {
         try {
           const json = JSON.parse(data);
           if (json.error) {
-            reject(new Error(json.error.message || "Gemini API error"));
+            reject(new Error(json.error.message || "Gemini error"));
           } else {
             const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
             if (text) resolve(text);
@@ -138,27 +180,24 @@ function callGemini(prompt) {
   });
 }
 
-async function generateSummary(videoUrl, language, summaryType) {
+// ─── GENERATE SUMMARY FROM TRANSCRIPT ────────────────────
+async function generateSummary(transcript, language, summaryType) {
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi"
     ? "Respond entirely in Hindi language."
     : "Respond in English.";
 
+  const transcriptSlice = transcript.slice(0, isDetailed ? 12000 : 8000);
+
   const prompt = isDetailed
     ? `You are an expert content summarizer. ${langNote}
 
-You are given a YouTube video URL. Based on the content available at this URL, provide a DETAILED summary in this exact format using plain text only, no emojis:
+Based on this YouTube video transcript, provide a DETAILED summary in plain text only, no emojis:
 
 Detailed Video Summary
 
 Overview
 Write 4-5 sentences summarizing the video.
-
-Key Moments
-00:00 - Topic 1
-01:30 - Topic 2
-03:00 - Topic 3
-05:00 - Topic 4
 
 Key Points
 - Point 1
@@ -172,21 +211,16 @@ Key Points
 Conclusion
 Write 2-3 sentences concluding the video.
 
-YouTube URL: ${videoUrl}`
+Transcript:
+${transcriptSlice}`
     : `You are an expert content summarizer. ${langNote}
 
-You are given a YouTube video URL. Based on the content available at this URL, provide a SHORT summary in this exact format using plain text only, no emojis:
+Based on this YouTube video transcript, provide a SHORT summary in plain text only, no emojis:
 
 Video Summary
 
 Overview
 Write 2-3 sentences summarizing the video.
-
-Key Moments
-00:00 - Topic 1
-01:20 - Topic 2
-02:45 - Topic 3
-04:10 - Topic 4
 
 Key Points
 - Point 1
@@ -194,7 +228,8 @@ Key Points
 - Point 3
 - Point 4
 
-YouTube URL: ${videoUrl}`;
+Transcript:
+${transcriptSlice}`;
 
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error("TIMEOUT")), 30000)
@@ -232,6 +267,7 @@ app.post("/api/summarize", async (req, res) => {
     return res.status(400).json({ success: false, error: "Invalid YouTube URL." });
   }
 
+  // ── Cache Check ──
   const cacheKey = `${videoId}_${language}_${summaryType}`;
   const cached = summaryCache.get(cacheKey);
 
@@ -252,10 +288,22 @@ app.post("/api/summarize", async (req, res) => {
   }
 
   try {
-    const [summary, videoInfo] = await Promise.all([
-      generateSummary(videoUrl, language, summaryType),
+    // Fetch transcript + video info in parallel
+    const [transcript, videoInfo] = await Promise.all([
+      fetchTranscript(videoId),
       fetchVideoInfo(videoId)
     ]);
+
+    if (!transcript) {
+      analytics.transcriptFails++;
+      return res.status(404).json({
+        success: false,
+        code: "transcript_unavailable",
+        error: "Transcript not available for this video. Try a video with subtitles enabled."
+      });
+    }
+
+    const summary = await generateSummary(transcript, language, summaryType);
 
     if (summaryCache.size >= MAX_CACHE_ENTRIES) {
       summaryCache.delete(summaryCache.keys().next().value);
