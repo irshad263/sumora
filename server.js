@@ -8,7 +8,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 5000;
 
 // !! APNA CLOUDFLARE WORKER URL YAHAN DAALO !!
-const CLOUDFLARE_WORKER_URL = "https://sumora.tradermulk77.workers.dev";
+const CLOUDFLARE_WORKER_URL = "https://sumora-transcript.tradermulk77.workers.dev";
 
 if (!GEMINI_API_KEY) {
   console.warn("WARNING: GEMINI_API_KEY is not set.");
@@ -352,4 +352,3 @@ process.on("unhandledRejection", (reason) => console.error("Unhandled Rejection:
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Sumora server running on port ${PORT}`);
 });
-
