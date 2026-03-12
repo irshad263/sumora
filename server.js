@@ -4,8 +4,8 @@ const https = require("https");
 const helmet = require("helmet");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const SUPADATA_KEY = process.env.SUPADATA_KEY;
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY; // Solid API - youtube-transcripts.p.rapidapi.com
 const PORT = process.env.PORT || 5000;
 
 const app = express();
@@ -28,8 +28,9 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 const analytics = {
-  totalRequests: 0, cacheHits: 0, geminiFails: 0,
-  successfulSummaries: 0, geminiUrlHits: 0, supadataHits: 0, rapidapiHits: 0
+  totalRequests: 0, cacheHits: 0, geminiFails: 0, successfulSummaries: 0,
+  geminiUrlHits: 0, supadataHits: 0,
+  rapid1Hits: 0, rapid2Hits: 0, rapid3Hits: 0, rapid4Hits: 0
 };
 
 function getToday() { return new Date().toISOString().slice(0, 10); }
@@ -64,7 +65,7 @@ function fetchVideoInfo(videoId) {
   });
 }
 
-// ─── GEMINI DIRECT API ────────────────────────────────────
+// ─── GEMINI API ───────────────────────────────────────────
 function callGemini(prompt) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
@@ -93,17 +94,32 @@ function callGemini(prompt) {
   });
 }
 
+// ─── HTTPS HELPER ─────────────────────────────────────────
+function httpsGet(hostname, path, headers) {
+  return new Promise((resolve) => {
+    const options = { hostname, path, method: "GET", headers };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", c => data += c);
+      res.on("end", () => {
+        try { resolve(JSON.parse(data)); }
+        catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
 // ─── METHOD 1: GEMINI URL (Unlimited FREE) ────────────────
-// Gemini ko URL dete hain — famous videos pe achhi summary aati hai
-// Agar "I don't have information" jaisa response aaya = unknown video
 async function tryGeminiUrl(videoUrl, language, summaryType) {
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi" ? "Respond entirely in Hindi." : "Respond in English.";
 
   const prompt = isDetailed
     ? `You are an expert YouTube video summarizer. ${langNote}
-
-I will give you a YouTube URL. If you have knowledge about this specific video, provide a DETAILED summary in plain text, no emojis:
+If you have knowledge about this specific video, provide a DETAILED summary in plain text, no emojis:
 
 Detailed Video Summary
 
@@ -111,13 +127,13 @@ Overview
 [4-5 sentences about actual video content]
 
 Key Points
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
+- [actual point]
+- [actual point]
+- [actual point]
+- [actual point]
+- [actual point]
+- [actual point]
+- [actual point]
 
 Conclusion
 [2-3 sentences]
@@ -126,8 +142,7 @@ If you do NOT have specific knowledge about this video, respond with exactly: NE
 
 YouTube URL: ${videoUrl}`
     : `You are an expert YouTube video summarizer. ${langNote}
-
-I will give you a YouTube URL. If you have knowledge about this specific video, provide a SHORT summary in plain text, no emojis:
+If you have knowledge about this specific video, provide a SHORT summary in plain text, no emojis:
 
 Video Summary
 
@@ -135,91 +150,108 @@ Overview
 [2-3 sentences about actual video content]
 
 Key Points
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
-- [actual point from video]
+- [actual point]
+- [actual point]
+- [actual point]
+- [actual point]
 
 If you do NOT have specific knowledge about this video, respond with exactly: NEEDS_TRANSCRIPT
 
 YouTube URL: ${videoUrl}`;
 
   const result = await callGemini(prompt);
-
-  // Agar Gemini ne bola NEEDS_TRANSCRIPT ya kuch generic diya
   if (result.includes("NEEDS_TRANSCRIPT") || result.includes("I don't have") || result.includes("I cannot access")) {
-    return null; // Transcript API try karo
+    return null;
   }
-
   return result;
 }
 
-// ─── METHOD 2: SUPADATA (100 free/month) ──────────────────
-function fetchViaSupadata(videoId) {
-  return new Promise((resolve) => {
-    if (!SUPADATA_KEY) return resolve(null);
-
-    const options = {
-      hostname: "api.supadata.ai",
-      path: `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
-      method: "GET",
-      headers: { "x-api-key": SUPADATA_KEY }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", c => data += c);
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(data);
-          const text = json.content || json.text || null;
-          resolve(text && text.length > 50 ? text : null);
-        } catch { resolve(null); }
-      });
-    });
-
-    req.on("error", () => resolve(null));
-    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
-    req.end();
-  });
+// ─── METHOD 2: SUPADATA ───────────────────────────────────
+async function trySupadata(videoId) {
+  if (!SUPADATA_KEY) return null;
+  const data = await httpsGet(
+    "api.supadata.ai",
+    `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
+    { "x-api-key": SUPADATA_KEY }
+  );
+  const text = data?.content || data?.text || null;
+  return text && text.length > 50 ? text : null;
 }
 
-// ─── METHOD 3: RAPIDAPI (100 free/month) ──────────────────
-function fetchViaRapidAPI(videoId) {
-  return new Promise((resolve) => {
-    if (!RAPIDAPI_KEY) return resolve(null);
-
-    const options = {
-      hostname: "youtube-transcripts.p.rapidapi.com",
-      path: `/youtube/transcript?videoId=${videoId}&chunkSize=500`,
-      method: "GET",
-      headers: {
-        "x-rapidapi-host": "youtube-transcripts.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", c => data += c);
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.content && Array.isArray(json.content)) {
-            const text = json.content.map(c => c.text).join(" ").replace(/\s+/g, " ").trim();
-            resolve(text.length > 50 ? text : null);
-          } else resolve(null);
-        } catch { resolve(null); }
-      });
-    });
-
-    req.on("error", () => resolve(null));
-    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
-    req.end();
-  });
+// ─── METHOD 3: RAPID API 1 - Solid API ───────────────────
+async function tryRapid1(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "youtube-transcripts.p.rapidapi.com",
+    `/youtube/transcript?videoId=${videoId}&chunkSize=500`,
+    { "x-rapidapi-host": "youtube-transcripts.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  if (!data?.content) return null;
+  const text = data.content.map(c => c.text).join(" ").replace(/\s+/g, " ").trim();
+  return text.length > 50 ? text : null;
 }
 
-// ─── SUMMARIZE FROM REAL TRANSCRIPT ──────────────────────
+// ─── METHOD 4: RAPID API 2 - LeadXpert ───────────────────
+async function tryRapid2(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "youtube2transcript.p.rapidapi.com",
+    `/transcript?videoId=${videoId}`,
+    { "x-rapidapi-host": "youtube2transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  const text = data?.transcript || data?.text || null;
+  return text && text.length > 50 ? text : null;
+}
+
+// ─── METHOD 5: RAPID API 3 - Blazing Fast ────────────────
+async function tryRapid3(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "fetch-youtube-transcript.p.rapidapi.com",
+    `/api/transcript?videoId=${videoId}`,
+    { "x-rapidapi-host": "fetch-youtube-transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  const text = data?.transcript || data?.text || null;
+  return text && text.length > 50 ? text : null;
+}
+
+// ─── METHOD 6: RAPID API 4 - Api-city ────────────────────
+async function tryRapid4(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "youtube-transcript3.p.rapidapi.com",
+    `/api/transcript?videoId=${videoId}`,
+    { "x-rapidapi-host": "youtube-transcript3.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  const text = data?.transcript || data?.text || null;
+  return text && text.length > 50 ? text : null;
+}
+
+// ─── METHOD 7: RAPID API 5 - YTScript ────────────────────
+async function tryRapid5(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "ytscript.p.rapidapi.com",
+    `/transcript?videoId=${videoId}`,
+    { "x-rapidapi-host": "ytscript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  const text = data?.transcript || data?.text || null;
+  return text && text.length > 50 ? text : null;
+}
+
+// ─── METHOD 8: RAPID API 6 - WAVALIDAT YouTube Transcript Generator ──
+async function tryRapid6(videoId) {
+  if (!RAPIDAPI_KEY) return null;
+  const data = await httpsGet(
+    "youtube-transcript-generator.p.rapidapi.com",
+    `/api/transcript?videoId=${videoId}`,
+    { "x-rapidapi-host": "youtube-transcript-generator.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
+  );
+  const text = data?.transcript || data?.text || data?.content || null;
+  return text && text.length > 50 ? text : null;
+}
+
+// ─── SUMMARIZE FROM TRANSCRIPT ────────────────────────────
 async function summarizeFromTranscript(transcript, language, summaryType) {
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi" ? "Respond entirely in Hindi." : "Respond in English.";
@@ -261,54 +293,80 @@ app.post("/api/summarize", async (req, res) => {
     let summary = null;
     let method = "";
 
-    // ── STEP 1: Gemini URL (FREE, unlimited) ──
+    // STEP 1: Gemini URL - FREE unlimited
     try {
       summary = await Promise.race([
         tryGeminiUrl(videoUrl, language, summaryType),
         new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 20000))
       ]);
+      if (summary) { analytics.geminiUrlHits++; method = "gemini_url"; }
     } catch { summary = null; }
 
-    if (summary) {
-      analytics.geminiUrlHits++;
-      method = "gemini_url";
-      console.log(`[GEMINI URL] ${videoId}`);
-    }
-
-    // ── STEP 2: Supadata transcript (100/month) ──
+    // STEP 2: Supadata - 100/month
     if (!summary) {
-      const transcript = await fetchViaSupadata(videoId);
-      if (transcript) {
-        analytics.supadataHits++;
-        method = "supadata";
-        console.log(`[SUPADATA] ${videoId}`);
-        summary = await Promise.race([
-          summarizeFromTranscript(transcript, language, summaryType),
-          new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))
-        ]);
+      const t = await trySupadata(videoId);
+      if (t) {
+        analytics.supadataHits++; method = "supadata";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
       }
     }
 
-    // ── STEP 3: RapidAPI transcript (100/month) ──
+    // STEP 3: Solid API - 100/month
     if (!summary) {
-      const transcript = await fetchViaRapidAPI(videoId);
-      if (transcript) {
-        analytics.rapidapiHits++;
-        method = "rapidapi";
-        console.log(`[RAPIDAPI] ${videoId}`);
-        summary = await Promise.race([
-          summarizeFromTranscript(transcript, language, summaryType),
-          new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))
-        ]);
+      const t = await tryRapid1(videoId);
+      if (t) {
+        analytics.rapid1Hits++; method = "rapid_solid";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
+      }
+    }
+
+    // STEP 4: LeadXpert - 150/month
+    if (!summary) {
+      const t = await tryRapid2(videoId);
+      if (t) {
+        analytics.rapid2Hits++; method = "rapid_leadxpert";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
+      }
+    }
+
+    // STEP 5: Blazing Fast - 100/month
+    if (!summary) {
+      const t = await tryRapid3(videoId);
+      if (t) {
+        analytics.rapid3Hits++; method = "rapid_blazing";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
+      }
+    }
+
+    // STEP 6: Api-city - 100/month
+    if (!summary) {
+      const t = await tryRapid4(videoId);
+      if (t) {
+        analytics.rapid4Hits++; method = "rapid_apicity";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
+      }
+    }
+
+    // STEP 7: YTScript - 300/month
+    if (!summary) {
+      const t = await tryRapid5(videoId);
+      if (t) {
+        method = "rapid_ytscript";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
+      }
+    }
+
+    // STEP 8: WAVALIDAT YouTube Transcript Generator - 300/month
+    if (!summary) {
+      const t = await tryRapid6(videoId);
+      if (t) {
+        method = "rapid_wavalidat";
+        summary = await Promise.race([summarizeFromTranscript(t, language, summaryType), new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))]);
       }
     }
 
     if (!summary) {
-      return res.status(404).json({
-        success: false,
-        code: "unavailable",
-        error: "Could not generate summary for this video. Please try another video."
-      });
+      return res.status(404).json({ success: false, code: "unavailable", error: "Could not generate summary for this video. Please try another video." });
     }
 
     if (summaryCache.size >= MAX_CACHE_ENTRIES) summaryCache.delete(summaryCache.keys().next().value);
@@ -317,12 +375,7 @@ app.post("/api/summarize", async (req, res) => {
     analytics.successfulSummaries++;
     incrementUsage(clientIP);
 
-    return res.json({
-      success: true, summary,
-      title: videoInfo.title, channel: videoInfo.channel,
-      usage: { used: getUsageCount(clientIP), limit: DAILY_LIMIT },
-      method
-    });
+    return res.json({ success: true, summary, title: videoInfo.title, channel: videoInfo.channel, usage: { used: getUsageCount(clientIP), limit: DAILY_LIMIT }, method });
 
   } catch (err) {
     console.error("Error:", err.message);
@@ -340,3 +393,4 @@ process.on("uncaughtException", err => console.error("Exception:", err.message))
 process.on("unhandledRejection", reason => console.error("Rejection:", reason));
 
 app.listen(PORT, "0.0.0.0", () => console.log(`Sumora running on port ${PORT}`));
+
