@@ -53,10 +53,12 @@
 
     /* ── GRADIENT TEXT ─────────────────────────────── */
     .grad {
-      background: linear-gradient(110deg, #a855f7, #4169e1);
+      background: linear-gradient(110deg, #e9d5ff 10%, #c084fc 30%, #a78bfa 55%, #7dd3fc 90%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+      color: #c084fc; /* fallback if gradient text fails */
+      filter: drop-shadow(0 0 24px rgba(192,132,252,0.4)) drop-shadow(0 0 8px rgba(125,211,252,0.2));
     }
 
     /* ── HERO ──────────────────────────────────────── */
