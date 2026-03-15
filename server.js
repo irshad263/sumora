@@ -78,21 +78,33 @@ function isMusicLike(title, transcript) {
 
 // FIX 2: relaxed quality check - was rejecting valid transcripts
 function getTranscriptQuality(transcript) {
-  if (!transcript || transcript.length < MIN_TRANSCRIPT_LENGTH) return "low";
+  if (!transcript || transcript.length < MIN_TRANSCRIPT_LENGTH) {
+    console.log(`[QUALITY CHECK] Too short: ${transcript ? transcript.length : 0}`);
+    return "low";
+  }
 
-  // Reject pure junk: very low alpha ratio (relaxed from 0.4 to 0.25)
   const alphaChars = (transcript.match(/[a-zA-Z\u0900-\u097F]/g) || []).length;
   const alphaRatio = alphaChars / transcript.length;
-  if (alphaRatio < 0.25) return "low";
+  console.log(`[QUALITY CHECK] alphaRatio=${alphaRatio.toFixed(3)} alphaChars=${alphaChars} total=${transcript.length}`);
+  if (alphaRatio < 0.25) {
+    console.log("[QUALITY CHECK] Rejected: low alpha ratio");
+    return "low";
+  }
 
-  // Reject if too few words (relaxed from 20 to 10)
   const words = transcript.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  if (words.length < 10) return "low";
+  console.log(`[QUALITY CHECK] words=${words.length}`);
+  if (words.length < 10) {
+    console.log("[QUALITY CHECK] Rejected: too few words");
+    return "low";
+  }
 
-  // Reject only extremely repetitive (relaxed from 0.2 to 0.1)
   const uniqueWords = new Set(words);
   const uniqueRatio = uniqueWords.size / words.length;
-  if (uniqueRatio < 0.1) return "low";
+  console.log(`[QUALITY CHECK] uniqueRatio=${uniqueRatio.toFixed(3)}`);
+  if (uniqueRatio < 0.1) {
+    console.log("[QUALITY CHECK] Rejected: too repetitive");
+    return "low";
+  }
 
   if (transcript.length < 800) return "medium";
   return "high";
@@ -142,7 +154,7 @@ function callGemini(prompt) {
     const body = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
     const options = {
       hostname: "generativelanguage.googleapis.com",
-      path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
       method: "POST",
       headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
     };
