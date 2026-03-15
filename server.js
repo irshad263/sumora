@@ -324,7 +324,8 @@ app.post("/api/summarize", async (req, res) => {
       ]);
     } catch (err) {
       if (err.message === "TIMEOUT") return res.status(504).json({ success: false, code: "summary_timeout", error: "Summary generation timed out. Please try again." });
-      throw err;
+      analytics.geminiFails++;
+      return res.status(500).json({ success: false, code: "server_error", error: "Summary generation failed. Please try again." });
     }
 
     if (!summary || !isValidSummary(summary)) {
