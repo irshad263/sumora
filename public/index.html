@@ -666,33 +666,31 @@
   function parseYouTubeUrl(raw) {
     if (!raw || typeof raw !== 'string') return null;
     const str = raw.trim();
-    // Handle youtu.be shortlinks
+    const idRegex = /^[a-zA-Z0-9_-]{10,12}$/;
     try {
       const url = new URL(str.startsWith('http') ? str : 'https://' + str);
       const host = url.hostname.replace('www.', '').replace('m.', '');
       if (host === 'youtu.be') {
         const id = url.pathname.slice(1).split('/')[0];
-        if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return { id, isShort: false };
+        if (idRegex.test(id)) return { id, isShort: false };
       }
       if (host === 'youtube.com') {
-        // /watch?v=
         if (url.searchParams.has('v')) {
           const id = url.searchParams.get('v');
-          if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return { id, isShort: false };
+          if (idRegex.test(id)) return { id, isShort: false };
         }
-        // /shorts/, /embed/, /live/, /v/
         const parts = url.pathname.split('/').filter(Boolean);
         const types = ['shorts', 'embed', 'live', 'v'];
         for (let i = 0; i < parts.length - 1; i++) {
           if (types.includes(parts[i])) {
             const id = parts[i + 1].split('?')[0];
-            if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return { id, isShort: parts[i] === 'shorts' };
+            if (idRegex.test(id)) return { id, isShort: parts[i] === 'shorts' };
           }
         }
       }
     } catch (_) {}
-    // Fallback regex for edge cases
-    const m = str.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    // Fallback regex
+    const m = str.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{10,12})/);
     if (m) return { id: m[1], isShort: str.includes('/shorts/') };
     return null;
   }
@@ -1013,3 +1011,4 @@
 
 </body>
 </html>
+
