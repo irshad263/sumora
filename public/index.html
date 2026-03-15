@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sumora — AI YouTube Summarizer</title>
   <meta name="description" content="Sumora summarizes YouTube videos in seconds using real transcripts and AI. No guessing. Honest summaries.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
@@ -58,7 +58,17 @@
       -webkit-text-fill-color: transparent;
       background-clip: text;
       color: #c084fc; /* fallback if gradient text fails */
-      filter: drop-shadow(0 0 24px rgba(192,132,252,0.4)) drop-shadow(0 0 8px rgba(125,211,252,0.2));
+    }
+
+    .hero h1 {
+      font-family: 'Syne', 'Arial Black', 'Trebuchet MS', sans-serif;
+      font-size: clamp(2.4rem, 6vw, 3.8rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 14px;
+      letter-spacing: -0.02em;
+      /* glow on parent — safer on Android than on gradient span */
+      filter: drop-shadow(0 0 20px rgba(192,132,252,0.3)) drop-shadow(0 0 8px rgba(125,211,252,0.15));
     }
 
     /* ── HERO ──────────────────────────────────────── */
@@ -81,17 +91,9 @@
       padding: 5px 14px;
       margin-bottom: 22px;
     }
-    .hero h1 {
-      font-family: 'Syne', sans-serif;
-      font-size: clamp(2.4rem, 6vw, 3.8rem);
-      font-weight: 800;
-      line-height: 1.1;
-      margin-bottom: 14px;
-      letter-spacing: -0.02em;
-    }
     .hero-sub {
       font-size: clamp(1rem, 2.5vw, 1.2rem);
-      color: var(--text-muted);
+      color: #9a9a9a;
       margin-bottom: 16px;
       max-width: 480px;
       margin-left: auto;
@@ -99,17 +101,17 @@
     }
     .hero-hint {
       font-size: 0.78rem;
-      color: var(--text-dim);
+      color: #606060;
       margin-bottom: 40px;
     }
-    .hero-hint span { color: #555; }
+    .hero-hint span { color: #505050; }
 
     /* ── INPUT CARD ────────────────────────────────── */
     .input-card {
       max-width: 580px;
       margin: 0 auto;
       background: var(--bg3);
-      border: 1px solid var(--border);
+      border: 1px solid rgba(167,139,250,0.12);
       border-radius: 16px;
       padding: 28px 28px 22px;
       display: flex;
@@ -1011,4 +1013,3 @@
 
 </body>
 </html>
-
