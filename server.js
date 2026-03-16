@@ -559,7 +559,14 @@ app.post("/api/summarize", async (req, res) => {
 });
 
 app.get("/api/usage", (req, res) => res.json({ used: getUsageCount(getClientIP(req)), limit: DAILY_LIMIT }));
-app.get("/api/stats", (req, res) => res.json({ ...analytics, cacheSize: summaryCache.size }));
+app.get("/api/stats", (req, res) => {
+  const clientIP = getClientIP(req);
+  // Only allow localhost or Render internal
+  if (clientIP !== "127.0.0.1" && clientIP !== "::1" && !clientIP.startsWith("10.")) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  res.json({ ...analytics, cacheSize: summaryCache.size });
+});
 app.get("/", (req, res) => res.send("Sumora Backend Running!"));
 
 process.on("uncaughtException", err => console.error("[UNCAUGHT]", err.message));
@@ -571,4 +578,3 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`[CONFIG] SUPADATA_KEY: ${SUPADATA_KEY ? "SET" : "MISSING"}`);
   console.log(`[CONFIG] RAPIDAPI_KEY: ${RAPIDAPI_KEY ? "SET" : "MISSING"}`);
 });
-
