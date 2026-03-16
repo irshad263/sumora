@@ -83,7 +83,7 @@ function getTranscriptQuality(transcript) {
     return "low";
   }
 
-  const alphaChars = (transcript.match(/[a-zA-Z\u0900-\u097F]/g) || []).length;
+  const alphaChars = (transcript.match(/[a-zA-Z\u0900-\u097F\u0600-\u06FF\u4e00-\u9fff]/g) || []).length;
   const alphaRatio = alphaChars / transcript.length;
   console.log(`[QUALITY CHECK] alphaRatio=${alphaRatio.toFixed(3)} alphaChars=${alphaChars} total=${transcript.length}`);
   if (alphaRatio < 0.25) {
@@ -295,20 +295,25 @@ function extractText(data, fields) {
 async function trySupadata(videoId) {
   if (!SUPADATA_KEY) { console.log("[SUPADATA] Key missing"); return null; }
   console.log("[SUPADATA] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "api.supadata.ai",
+
+  // Try English first, then any available language
+  const paths = [
+    `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true&lang=en`,
     `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
-    { "x-api-key": SUPADATA_KEY }
-  );
-  console.log("[SUPADATA] Raw keys:", data ? Object.keys(data) : "null");
-  if (data?.content) {
-    const sample = JSON.stringify(data.content).slice(0, 200);
-    console.log("[SUPADATA] content sample:", sample);
+  ];
+
+  for (const path of paths) {
+    const data = await httpsGet("api.supadata.ai", path, { "x-api-key": SUPADATA_KEY });
+    console.log("[SUPADATA] Raw keys:", data ? Object.keys(data) : "null");
+    if (data?.content) {
+      const sample = JSON.stringify(data.content).slice(0, 200);
+      console.log("[SUPADATA] content sample:", sample);
+    }
+    const text = extractText(data, ["content", "text"]);
+    console.log("[SUPADATA] Text length:", text ? text.length : 0);
+    if (text) return text;
   }
-  // Supadata returns { content: string|array, text: string }
-  const text = extractText(data, ["content", "text"]);
-  console.log("[SUPADATA] Text length:", text ? text.length : 0);
-  return text;
+  return null;
 }
 
 async function tryRapid1(videoId) {
@@ -566,3 +571,4 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`[CONFIG] SUPADATA_KEY: ${SUPADATA_KEY ? "SET" : "MISSING"}`);
   console.log(`[CONFIG] RAPIDAPI_KEY: ${RAPIDAPI_KEY ? "SET" : "MISSING"}`);
 });
+
