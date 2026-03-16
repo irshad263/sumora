@@ -843,7 +843,7 @@
     const badgesEl = document.getElementById('badges');
     badgesEl.innerHTML = '';
     if (data.sourceUsed) {
-      badgesEl.innerHTML += `<span class="badge badge-source">via ${esc(sourceLabel(data.sourceUsed))}</span>`;
+      badgesEl.innerHTML += `<span class="badge badge-source">Verified Transcript</span>`;
     }
     if (data.confidence) {
       const cls = data.confidence === 'High' ? 'badge-high' : data.confidence === 'Medium' ? 'badge-medium' : 'badge-low';
