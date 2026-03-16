@@ -4,7 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sumora — AI YouTube Summarizer</title>
-  <meta name="description" content="Sumora summarizes YouTube videos in seconds using real transcripts and AI. No guessing. Honest summaries.">
+  <meta name="description" content="Sumora summarizes YouTube videos in seconds using real transcripts. Get accurate AI summaries in English or Hindi. Free to use.">
+  <meta name="keywords" content="YouTube summarizer, AI summary, video summary, YouTube transcript, Hindi summary">
+  <meta name="author" content="Sumora">
+  <meta property="og:title" content="Sumora — AI YouTube Summarizer">
+  <meta property="og:description" content="Summarize any YouTube video in seconds. Transcript-first, no guessing. Free.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Sumora — AI YouTube Summarizer">
+  <meta name="twitter:description" content="Summarize any YouTube video in seconds. Free.">
+  <!-- Inline SVG Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%238a2be2'/><text x='50%' y='50%' font-family='Arial Black,sans-serif' font-size='18' font-weight='900' fill='white' text-anchor='middle' dominant-baseline='central'>S</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -772,9 +782,9 @@
   fetch('/api/usage').then(r => r.json()).then(d => setUsage(d.used, d.limit)).catch(() => {});
 
   // ── ERROR UI ─────────────────────────────────────────
-  function showError(msg) {
+  function showError(msg, showRetry) {
     const el = document.getElementById('error-box');
-    el.textContent = msg;
+    el.innerHTML = esc(msg) + (showRetry ? ' <button onclick="document.getElementById(\'summarize-btn\').click()" style="margin-left:10px;padding:3px 12px;font-size:0.8rem;border:1px solid rgba(255,77,77,0.4);background:transparent;color:#ff7b7b;border-radius:4px;cursor:pointer;">Try Again</button>' : '');
     el.classList.add('visible');
   }
   function hideError() {
@@ -973,13 +983,14 @@
         renderResult(data, parsed.id);
       } else {
         if (data.usage) setUsage(data.usage.used, data.usage.limit);
-        showError(friendlyError(data));
+        const retryable = ['server_error', 'summary_timeout'].includes(data.code);
+        showError(friendlyError(data), retryable);
       }
     } catch (_) {
       stopLoader();
       this.disabled = false;
       this.textContent = 'Summarize';
-      showError('Cannot connect to server. Please check your connection and try again.');
+      showError('Cannot connect to server. Please check your connection and try again.', true);
     }
   });
 
@@ -1011,4 +1022,3 @@
 
 </body>
 </html>
-
