@@ -15,7 +15,7 @@ app.use(express.json());
 app.use(express.static("public"));
 
 const rateLimitMap = new Map();
-const DAILY_LIMIT = 9;
+const DAILY_LIMIT = 3;
 const summaryCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
