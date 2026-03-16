@@ -242,7 +242,7 @@ function httpsGet(hostname, path, headers) {
   });
 }
 
-// FIX: extractText handles all known API response formats
+// extractText handles all known API response formats including deeply nested
 function extractText(data, fields) {
   if (!data) return null;
 
@@ -250,23 +250,41 @@ function extractText(data, fields) {
     const val = data[field];
     if (!val) continue;
 
-    // Handle array of objects — e.g. [{text:"..."}, {text:"..."}] or [{content:"..."}]
-    if (Array.isArray(val)) {
-      const joined = val.map(item => {
-        if (typeof item === "string") return item;
-        // Try all common text field names
-        return item?.text || item?.content || item?.transcript || item?.caption || "";
-      }).filter(s => s.length > 0).join(" ").replace(/\s+/g, " ").trim();
-      if (joined.length >= MIN_TRANSCRIPT_LENGTH) {
-        console.log(`[extractText] field="${field}" array joined length: ${joined.length}`);
-        return joined;
-      }
-    }
-
     // Handle plain string
     if (typeof val === "string" && val.length >= MIN_TRANSCRIPT_LENGTH) {
-      console.log(`[extractText] field="${field}" string length: ${val.length}`);
+      console.log(`[extractText] field="${field}" plain string, length: ${val.length}`);
       return val;
+    }
+
+    // Handle array
+    if (Array.isArray(val)) {
+      // Try joining directly if items are strings
+      const parts = [];
+      for (const item of val) {
+        if (typeof item === "string") {
+          parts.push(item);
+        } else if (typeof item === "object" && item !== null) {
+          // flat: {text: "..."} or {content: "..."}
+          const direct = item.text || item.content || item.transcript || item.caption || "";
+          if (direct) { parts.push(direct); continue; }
+
+          // nested: {lang:"en", text: [...]} — Supadata format
+          const nested = item.text || item.content;
+          if (Array.isArray(nested)) {
+            for (const n of nested) {
+              const t = typeof n === "string" ? n : (n?.text || n?.content || "");
+              if (t) parts.push(t);
+            }
+          }
+        }
+      }
+      const joined = parts.join(" ").replace(/\s+/g, " ").trim();
+      if (joined.length >= MIN_TRANSCRIPT_LENGTH) {
+        console.log(`[extractText] field="${field}" array joined, length: ${joined.length}`);
+        return joined;
+      } else {
+        console.log(`[extractText] field="${field}" array too short: ${joined.length}, sample: "${joined.slice(0,80)}"`);
+      }
     }
   }
   return null;
@@ -283,6 +301,10 @@ async function trySupadata(videoId) {
     { "x-api-key": SUPADATA_KEY }
   );
   console.log("[SUPADATA] Raw keys:", data ? Object.keys(data) : "null");
+  if (data?.content) {
+    const sample = JSON.stringify(data.content).slice(0, 200);
+    console.log("[SUPADATA] content sample:", sample);
+  }
   // Supadata returns { content: string|array, text: string }
   const text = extractText(data, ["content", "text"]);
   console.log("[SUPADATA] Text length:", text ? text.length : 0);
@@ -544,4 +566,3 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`[CONFIG] SUPADATA_KEY: ${SUPADATA_KEY ? "SET" : "MISSING"}`);
   console.log(`[CONFIG] RAPIDAPI_KEY: ${RAPIDAPI_KEY ? "SET" : "MISSING"}`);
 });
-
