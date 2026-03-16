@@ -154,7 +154,7 @@ function callGemini(prompt) {
     const body = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
     const options = {
       hostname: "generativelanguage.googleapis.com",
-      path: `/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       method: "POST",
       headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
     };
@@ -213,22 +213,32 @@ function httpsGet(hostname, path, headers) {
   });
 }
 
-// FIX 4: extractText helper handles all known response formats safely
+// FIX: extractText handles all known API response formats
 function extractText(data, fields) {
   if (!data) return null;
+
   for (const field of fields) {
     const val = data[field];
     if (!val) continue;
-    // Handle array of objects with text field (Solid API style)
+
+    // Handle array of objects — e.g. [{text:"..."}, {text:"..."}] or [{content:"..."}]
     if (Array.isArray(val)) {
-      const joined = val.map(item =>
-        typeof item === "string" ? item :
-        item?.text || item?.content || ""
-      ).join(" ").replace(/\s+/g, " ").trim();
-      if (joined.length >= MIN_TRANSCRIPT_LENGTH) return joined;
+      const joined = val.map(item => {
+        if (typeof item === "string") return item;
+        // Try all common text field names
+        return item?.text || item?.content || item?.transcript || item?.caption || "";
+      }).filter(s => s.length > 0).join(" ").replace(/\s+/g, " ").trim();
+      if (joined.length >= MIN_TRANSCRIPT_LENGTH) {
+        console.log(`[extractText] field="${field}" array joined length: ${joined.length}`);
+        return joined;
+      }
     }
+
     // Handle plain string
-    if (typeof val === "string" && val.length >= MIN_TRANSCRIPT_LENGTH) return val;
+    if (typeof val === "string" && val.length >= MIN_TRANSCRIPT_LENGTH) {
+      console.log(`[extractText] field="${field}" string length: ${val.length}`);
+      return val;
+    }
   }
   return null;
 }
