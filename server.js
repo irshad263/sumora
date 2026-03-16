@@ -149,12 +149,41 @@ function fetchVideoInfo(videoId) {
   });
 }
 
-function callGemini(prompt) {
+const GEMINI_MODELS = [
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-latest",
+  "gemini-2.0-flash-lite",
+  "gemini-2.0-flash",
+];
+
+async function callGeminiWithFallback(prompt) {
+  for (const model of GEMINI_MODELS) {
+    try {
+      console.log(`[GEMINI] Trying model: ${model}`);
+      const result = await callGemini(prompt, model);
+      console.log(`[GEMINI] Success with model: ${model}`);
+      return result;
+    } catch (e) {
+      const msg = e.message || "";
+      const isQuota = msg.includes("quota") || msg.includes("limit: 0") || msg.includes("RESOURCE_EXHAUSTED");
+      const isNotFound = msg.includes("not found") || msg.includes("not supported");
+      if (isQuota || isNotFound) {
+        console.log(`[GEMINI] Model ${model} failed (${isQuota ? "quota" : "not found"}), trying next...`);
+        continue;
+      }
+      // Real error — don't retry
+      throw e;
+    }
+  }
+  throw new Error("All Gemini models exhausted");
+}
+
+function callGemini(prompt, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
     const options = {
       hostname: "generativelanguage.googleapis.com",
-      path: `/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
       method: "POST",
       headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
     };
@@ -165,13 +194,13 @@ function callGemini(prompt) {
         try {
           const json = JSON.parse(data);
           if (json.error) {
-            console.error("[GEMINI ERROR]", json.error.message);
+            console.error(`[GEMINI ERROR] ${model}:`, json.error.message);
             return reject(new Error(json.error.message));
           }
           const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
           if (text) resolve(text);
           else {
-            console.error("[GEMINI] No text in response:", JSON.stringify(json).slice(0, 200));
+            console.error(`[GEMINI] No text in response from ${model}`);
             reject(new Error("No response from Gemini"));
           }
         } catch (e) {
@@ -380,7 +409,7 @@ async function summarizeFromTranscript(transcript, language, summaryType) {
   const prompt = isDetailed
     ? `You are an expert summarizer. ${langNote}\n${strict}\n\nWrite a DETAILED summary in plain text, no emojis:\n\nDetailed Video Summary\n\nOverview\n[4-5 sentences from transcript]\n\nKey Points\n- [from transcript]\n- [from transcript]\n- [from transcript]\n- [from transcript]\n- [from transcript]\n- [from transcript]\n- [from transcript]\n\nConclusion\n[2-3 sentences]\n\nTranscript:\n${chunk}`
     : `You are an expert summarizer. ${langNote}\n${strict}\n\nWrite a SHORT summary in plain text, no emojis:\n\nVideo Summary\n\nOverview\n[2-3 sentences from transcript]\n\nKey Points\n- [from transcript]\n- [from transcript]\n- [from transcript]\n- [from transcript]\n\nTranscript:\n${chunk}`;
-  return callGemini(prompt);
+  return callGeminiWithFallback(prompt);
 }
 
 // ── MAIN ROUTE ─────────────────────────────────────────────
@@ -515,3 +544,4 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`[CONFIG] SUPADATA_KEY: ${SUPADATA_KEY ? "SET" : "MISSING"}`);
   console.log(`[CONFIG] RAPIDAPI_KEY: ${RAPIDAPI_KEY ? "SET" : "MISSING"}`);
 });
+
