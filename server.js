@@ -14,24 +14,34 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-const rateLimitMap = new Map();
+// ── CONSTANTS ──────────────────────────────────────────────
 const DAILY_LIMIT = 3;
-const summaryCache = new Map();
+const DAILY_ATTEMPT_LIMIT = 12;  // max total attempts per day (anti-spam)
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
-const MIN_TRANSCRIPT_LENGTH = 150; // relaxed from 200
+const MIN_TRANSCRIPT_LENGTH = 150;
 
+// ── MAPS ───────────────────────────────────────────────────
+const successMap = new Map();
+const attemptMap = new Map();
+const summaryCache = new Map();
+
+// ── CLEANUP ────────────────────────────────────────────────
 setInterval(() => {
   const now = Date.now();
+  const today = getToday();
   for (const [key, val] of summaryCache) {
     if (now - val.createdAt > CACHE_TTL) summaryCache.delete(key);
   }
-  const today = getToday();
-  for (const key of rateLimitMap.keys()) {
-    if (!key.endsWith(`__${today}`)) rateLimitMap.delete(key);
+  for (const key of successMap.keys()) {
+    if (!key.endsWith(`__${today}`)) successMap.delete(key);
+  }
+  for (const key of attemptMap.keys()) {
+    if (!key.endsWith(`__${today}`)) attemptMap.delete(key);
   }
 }, 30 * 60 * 1000);
 
+// ── ANALYTICS ──────────────────────────────────────────────
 const analytics = {
   totalRequests: 0, cacheHits: 0, geminiFails: 0, successfulSummaries: 0,
   supadataHits: 0, rapid1Hits: 0, rapid2Hits: 0, rapid3Hits: 0,
@@ -39,6 +49,7 @@ const analytics = {
   transcriptNotFound: 0, notEnoughData: 0, shortsRejected: 0
 };
 
+// ── HELPERS ────────────────────────────────────────────────
 function getToday() { return new Date().toISOString().slice(0, 10); }
 
 function getClientIP(req) {
@@ -46,18 +57,25 @@ function getClientIP(req) {
   return fwd ? fwd.split(",")[0].trim() : req.socket.remoteAddress;
 }
 
-function isLimitReached(ip) { return (rateLimitMap.get(`${ip}__${getToday()}`) || 0) >= DAILY_LIMIT; }
-
-function incrementUsage(ip) {
+// Successful summaries count
+function getSuccessCount(ip) { return successMap.get(`${ip}__${getToday()}`) || 0; }
+function isSuccessLimitReached(ip) { return getSuccessCount(ip) >= DAILY_LIMIT; }
+function incrementSuccess(ip) {
   const key = `${ip}__${getToday()}`;
-  rateLimitMap.set(key, (rateLimitMap.get(key) || 0) + 1);
+  successMap.set(key, (successMap.get(key) || 0) + 1);
 }
 
-function getUsageCount(ip) { return rateLimitMap.get(`${ip}__${getToday()}`) || 0; }
+// Attempt tracking (anti-spam)
+function getAttemptCount(ip) { return attemptMap.get(`${ip}__${getToday()}`) || 0; }
+function isAttemptLimitReached(ip) { return getAttemptCount(ip) >= DAILY_ATTEMPT_LIMIT; }
+function incrementAttempt(ip) {
+  const key = `${ip}__${getToday()}`;
+  attemptMap.set(key, (attemptMap.get(key) || 0) + 1);
+}
 
-// FIX 1: relaxed regex {10,12} to match both 10 and 11 char video IDs
+// FIX: YouTube IDs are exactly 11 characters
 function extractVideoId(url) {
-  const match = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{10,12})/);
+  const match = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   return match ? match[1] : null;
 }
 
@@ -76,36 +94,15 @@ function isMusicLike(title, transcript) {
   return hasMusikTitle;
 }
 
-// FIX 2: relaxed quality check - was rejecting valid transcripts
 function getTranscriptQuality(transcript) {
-  if (!transcript || transcript.length < MIN_TRANSCRIPT_LENGTH) {
-    console.log(`[QUALITY CHECK] Too short: ${transcript ? transcript.length : 0}`);
-    return "low";
-  }
-
+  if (!transcript || transcript.length < MIN_TRANSCRIPT_LENGTH) return "low";
   const alphaChars = (transcript.match(/[a-zA-Z\u0900-\u097F\u0600-\u06FF\u4e00-\u9fff]/g) || []).length;
   const alphaRatio = alphaChars / transcript.length;
-  console.log(`[QUALITY CHECK] alphaRatio=${alphaRatio.toFixed(3)} alphaChars=${alphaChars} total=${transcript.length}`);
-  if (alphaRatio < 0.25) {
-    console.log("[QUALITY CHECK] Rejected: low alpha ratio");
-    return "low";
-  }
-
+  if (alphaRatio < 0.25) return "low";
   const words = transcript.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  console.log(`[QUALITY CHECK] words=${words.length}`);
-  if (words.length < 10) {
-    console.log("[QUALITY CHECK] Rejected: too few words");
-    return "low";
-  }
-
+  if (words.length < 10) return "low";
   const uniqueWords = new Set(words);
-  const uniqueRatio = uniqueWords.size / words.length;
-  console.log(`[QUALITY CHECK] uniqueRatio=${uniqueRatio.toFixed(3)}`);
-  if (uniqueRatio < 0.1) {
-    console.log("[QUALITY CHECK] Rejected: too repetitive");
-    return "low";
-  }
-
+  if (uniqueWords.size / words.length < 0.1) return "low";
   if (transcript.length < 800) return "medium";
   return "high";
 }
@@ -120,16 +117,9 @@ function isValidSummary(text) {
   if (!text || text.trim().length < 80) return false;
   const lower = text.toLowerCase();
   const fillerPhrases = [
-    "i cannot summarize",
-    "i don't have enough",
-    "i'm unable to",
-    "no transcript",
-    "not enough information",
-    "cannot provide a summary",
-    "unable to generate",
-    "i cannot provide",
-    "insufficient data",
-    "no meaningful content"
+    "i cannot summarize", "i don't have enough", "i'm unable to",
+    "no transcript", "not enough information", "cannot provide a summary",
+    "unable to generate", "i cannot provide", "insufficient data", "no meaningful content"
   ];
   return !fillerPhrases.some(p => lower.includes(p));
 }
@@ -149,6 +139,7 @@ function fetchVideoInfo(videoId) {
   });
 }
 
+// ── GEMINI ─────────────────────────────────────────────────
 const GEMINI_MODELS = [
   "gemini-2.0-flash-lite",
   "gemini-2.0-flash",
@@ -159,19 +150,14 @@ const GEMINI_MODELS = [
 async function callGeminiWithFallback(prompt) {
   for (const model of GEMINI_MODELS) {
     try {
-      console.log(`[GEMINI] Trying model: ${model}`);
       const result = await callGemini(prompt, model);
-      console.log(`[GEMINI] Success with model: ${model}`);
+      console.log(`[GEMINI SUCCESS] model: ${model}`);
       return result;
     } catch (e) {
       const msg = e.message || "";
       const isQuota = msg.includes("quota") || msg.includes("limit: 0") || msg.includes("RESOURCE_EXHAUSTED");
       const isNotFound = msg.includes("not found") || msg.includes("not supported");
-      if (isQuota || isNotFound) {
-        console.log(`[GEMINI] Model ${model} failed (${isQuota ? "quota" : "not found"}), trying next...`);
-        continue;
-      }
-      // Real error — don't retry
+      if (isQuota || isNotFound) continue;
       throw e;
     }
   }
@@ -193,30 +179,21 @@ function callGemini(prompt, model) {
       res.on("end", () => {
         try {
           const json = JSON.parse(data);
-          if (json.error) {
-            console.error(`[GEMINI ERROR] ${model}:`, json.error.message);
-            return reject(new Error(json.error.message));
-          }
+          if (json.error) return reject(new Error(json.error.message));
           const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
           if (text) resolve(text);
-          else {
-            console.error(`[GEMINI] No text in response from ${model}`);
-            reject(new Error("No response from Gemini"));
-          }
-        } catch (e) {
-          console.error("[GEMINI PARSE ERROR]", e.message);
-          reject(new Error("Parse error"));
-        }
+          else reject(new Error("No response from Gemini"));
+        } catch { reject(new Error("Parse error")); }
       });
     });
-    req.on("error", (e) => { console.error("[GEMINI REQUEST ERROR]", e.message); reject(e); });
+    req.on("error", reject);
     req.setTimeout(30000, () => { req.destroy(); reject(new Error("TIMEOUT")); });
     req.write(body);
     req.end();
   });
 }
 
-// FIX 3: httpsGet now logs raw response for debugging
+// ── HTTPS HELPER ───────────────────────────────────────────
 function httpsGet(hostname, path, headers) {
   return new Promise((resolve) => {
     const options = { hostname, path, method: "GET", headers };
@@ -224,51 +201,30 @@ function httpsGet(hostname, path, headers) {
       let data = "";
       res.on("data", c => data += c);
       res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          resolve(parsed);
-        } catch {
-          console.error(`[HTTPS] Parse fail for ${hostname}${path} — raw:`, data.slice(0, 150));
-          resolve(null);
-        }
+        try { resolve(JSON.parse(data)); }
+        catch { resolve(null); }
       });
     });
-    req.on("error", (e) => {
-      console.error(`[HTTPS ERROR] ${hostname}:`, e.message);
-      resolve(null);
-    });
+    req.on("error", () => resolve(null));
     req.setTimeout(15000, () => { req.destroy(); resolve(null); });
     req.end();
   });
 }
 
-// extractText handles all known API response formats including deeply nested
+// ── EXTRACT TEXT ───────────────────────────────────────────
 function extractText(data, fields) {
   if (!data) return null;
-
   for (const field of fields) {
     const val = data[field];
     if (!val) continue;
-
-    // Handle plain string
-    if (typeof val === "string" && val.length >= MIN_TRANSCRIPT_LENGTH) {
-      console.log(`[extractText] field="${field}" plain string, length: ${val.length}`);
-      return val;
-    }
-
-    // Handle array
+    if (typeof val === "string" && val.length >= MIN_TRANSCRIPT_LENGTH) return val;
     if (Array.isArray(val)) {
-      // Try joining directly if items are strings
       const parts = [];
       for (const item of val) {
-        if (typeof item === "string") {
-          parts.push(item);
-        } else if (typeof item === "object" && item !== null) {
-          // flat: {text: "..."} or {content: "..."}
+        if (typeof item === "string") { parts.push(item); continue; }
+        if (typeof item === "object" && item !== null) {
           const direct = item.text || item.content || item.transcript || item.caption || "";
           if (direct) { parts.push(direct); continue; }
-
-          // nested: {lang:"en", text: [...]} — Supadata format
           const nested = item.text || item.content;
           if (Array.isArray(nested)) {
             for (const n of nested) {
@@ -279,38 +235,22 @@ function extractText(data, fields) {
         }
       }
       const joined = parts.join(" ").replace(/\s+/g, " ").trim();
-      if (joined.length >= MIN_TRANSCRIPT_LENGTH) {
-        console.log(`[extractText] field="${field}" array joined, length: ${joined.length}`);
-        return joined;
-      } else {
-        console.log(`[extractText] field="${field}" array too short: ${joined.length}, sample: "${joined.slice(0,80)}"`);
-      }
+      if (joined.length >= MIN_TRANSCRIPT_LENGTH) return joined;
     }
   }
   return null;
 }
 
 // ── TRANSCRIPT SOURCES ─────────────────────────────────────
-
 async function trySupadata(videoId) {
-  if (!SUPADATA_KEY) { console.log("[SUPADATA] Key missing"); return null; }
-  console.log("[SUPADATA] Trying videoId:", videoId);
-
-  // Try English first, then any available language
+  if (!SUPADATA_KEY) return null;
   const paths = [
     `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true&lang=en`,
     `/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
   ];
-
   for (const path of paths) {
     const data = await httpsGet("api.supadata.ai", path, { "x-api-key": SUPADATA_KEY });
-    console.log("[SUPADATA] Raw keys:", data ? Object.keys(data) : "null");
-    if (data?.content) {
-      const sample = JSON.stringify(data.content).slice(0, 200);
-      console.log("[SUPADATA] content sample:", sample);
-    }
     const text = extractText(data, ["content", "text"]);
-    console.log("[SUPADATA] Text length:", text ? text.length : 0);
     if (text) return text;
   }
   return null;
@@ -318,87 +258,38 @@ async function trySupadata(videoId) {
 
 async function tryRapid1(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID1-Solid] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "youtube-transcripts.p.rapidapi.com",
-    `/youtube/transcript?videoId=${videoId}&chunkSize=500`,
-    { "x-rapidapi-host": "youtube-transcripts.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID1-Solid] Raw keys:", data ? Object.keys(data) : "null");
-  // Solid API returns { content: [{text: "..."}] }
-  const text = extractText(data, ["content", "transcript", "text"]);
-  console.log("[RAPID1-Solid] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("youtube-transcripts.p.rapidapi.com", `/youtube/transcript?videoId=${videoId}&chunkSize=500`, { "x-rapidapi-host": "youtube-transcripts.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["content", "transcript", "text"]);
 }
 
 async function tryRapid2(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID2-LeadXpert] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "youtube2transcript.p.rapidapi.com",
-    `/transcript?videoId=${videoId}`,
-    { "x-rapidapi-host": "youtube2transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID2-LeadXpert] Raw keys:", data ? Object.keys(data) : "null");
-  const text = extractText(data, ["transcript", "text", "content"]);
-  console.log("[RAPID2-LeadXpert] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("youtube2transcript.p.rapidapi.com", `/transcript?videoId=${videoId}`, { "x-rapidapi-host": "youtube2transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["transcript", "text", "content"]);
 }
 
 async function tryRapid3(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID3-Blazing] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "fetch-youtube-transcript.p.rapidapi.com",
-    `/api/transcript?videoId=${videoId}`,
-    { "x-rapidapi-host": "fetch-youtube-transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID3-Blazing] Raw keys:", data ? Object.keys(data) : "null");
-  const text = extractText(data, ["transcript", "text", "content"]);
-  console.log("[RAPID3-Blazing] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("fetch-youtube-transcript.p.rapidapi.com", `/api/transcript?videoId=${videoId}`, { "x-rapidapi-host": "fetch-youtube-transcript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["transcript", "text", "content"]);
 }
 
 async function tryRapid4(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID4-Apicity] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "youtube-transcript3.p.rapidapi.com",
-    `/api/transcript?videoId=${videoId}`,
-    { "x-rapidapi-host": "youtube-transcript3.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID4-Apicity] Raw keys:", data ? Object.keys(data) : "null");
-  const text = extractText(data, ["transcript", "text", "content"]);
-  console.log("[RAPID4-Apicity] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("youtube-transcript3.p.rapidapi.com", `/api/transcript?videoId=${videoId}`, { "x-rapidapi-host": "youtube-transcript3.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["transcript", "text", "content"]);
 }
 
 async function tryRapid5(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID5-YTScript] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "ytscript.p.rapidapi.com",
-    `/transcript?videoId=${videoId}`,
-    { "x-rapidapi-host": "ytscript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID5-YTScript] Raw keys:", data ? Object.keys(data) : "null");
-  const text = extractText(data, ["transcript", "text", "content"]);
-  console.log("[RAPID5-YTScript] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("ytscript.p.rapidapi.com", `/transcript?videoId=${videoId}`, { "x-rapidapi-host": "ytscript.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["transcript", "text", "content"]);
 }
 
 async function tryRapid6(videoId) {
   if (!RAPIDAPI_KEY) return null;
-  console.log("[RAPID6-WAVALIDAT] Trying videoId:", videoId);
-  const data = await httpsGet(
-    "youtube-transcript-generator.p.rapidapi.com",
-    `/api/transcript?videoId=${videoId}`,
-    { "x-rapidapi-host": "youtube-transcript-generator.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY }
-  );
-  console.log("[RAPID6-WAVALIDAT] Raw keys:", data ? Object.keys(data) : "null");
-  const text = extractText(data, ["transcript", "text", "content"]);
-  console.log("[RAPID6-WAVALIDAT] Text length:", text ? text.length : 0);
-  return text;
+  const data = await httpsGet("youtube-transcript-generator.p.rapidapi.com", `/api/transcript?videoId=${videoId}`, { "x-rapidapi-host": "youtube-transcript-generator.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY });
+  return extractText(data, ["transcript", "text", "content"]);
 }
 
 async function fetchTranscript(videoId) {
@@ -411,23 +302,21 @@ async function fetchTranscript(videoId) {
     { fn: () => tryRapid5(videoId), name: "rapid_ytscript" },
     { fn: () => tryRapid6(videoId), name: "rapid_wavalidat" },
   ];
-
   for (const source of sources) {
     try {
       const text = await source.fn();
       if (text) {
-        console.log(`[TRANSCRIPT] SUCCESS via ${source.name}, length: ${text.length}`);
+        console.log(`[TRANSCRIPT SUCCESS] source: ${source.name}, length: ${text.length}`);
         return { text, source: source.name };
       }
-      console.log(`[TRANSCRIPT] ${source.name} returned nothing, trying next...`);
     } catch (e) {
-      console.error(`[TRANSCRIPT] ${source.name} threw error:`, e.message);
+      console.error(`[ERROR] Transcript source ${source.name}:`, e.message);
     }
   }
-  console.log("[TRANSCRIPT] All sources exhausted — no transcript found");
   return null;
 }
 
+// ── SUMMARIZE ──────────────────────────────────────────────
 async function summarizeFromTranscript(transcript, language, summaryType) {
   const isDetailed = summaryType === "detailed";
   const langNote = language === "Hindi" ? "Respond entirely in Hindi." : "Respond in English.";
@@ -443,57 +332,78 @@ async function summarizeFromTranscript(transcript, language, summaryType) {
 app.post("/api/summarize", async (req, res) => {
   analytics.totalRequests++;
   const clientIP = getClientIP(req);
-  console.log(`\n[REQUEST] from ${clientIP}`);
+  console.log(`[REQUEST] from ${clientIP}`);
 
-  if (isLimitReached(clientIP)) {
-    console.log("[RATE LIMIT] hit for", clientIP);
-    return res.status(429).json({ success: false, code: "rate_limit", error: "Daily limit reached. Try again tomorrow.", usage: { used: DAILY_LIMIT, limit: DAILY_LIMIT } });
+  // STEP 1: Check successful summary limit
+  if (isSuccessLimitReached(clientIP)) {
+    return res.status(429).json({
+      success: false, code: "rate_limit",
+      error: "You've used all 3 free summaries for today. Come back tomorrow.",
+      usage: { used: DAILY_LIMIT, limit: DAILY_LIMIT }
+    });
   }
 
-  if (!GEMINI_API_KEY) {
-    console.error("[CONFIG] GEMINI_API_KEY missing!");
-    return res.status(500).json({ success: false, code: "server_error", error: "Server misconfigured." });
+  // STEP 2: Check attempt limit (anti-spam — prevents Shorts/fail spam)
+  if (isAttemptLimitReached(clientIP)) {
+    return res.status(429).json({
+      success: false, code: "rate_limit",
+      error: "Too many requests today. Please try again tomorrow.",
+      usage: { used: getSuccessCount(clientIP), limit: DAILY_LIMIT }
+    });
   }
+
+  // STEP 3: Validate inputs
+  if (!GEMINI_API_KEY) return res.status(500).json({ success: false, code: "server_error", error: "Server misconfigured." });
 
   const { videoUrl, language = "English", summaryType = "short" } = req.body;
-  console.log(`[REQUEST] url=${videoUrl} lang=${language} type=${summaryType}`);
 
   if (!videoUrl) return res.status(400).json({ success: false, code: "invalid_url", error: "Please provide a YouTube URL." });
 
   const videoId = extractVideoId(videoUrl);
-  console.log("[VIDEO ID]", videoId);
   if (!videoId) return res.status(400).json({ success: false, code: "invalid_url", error: "Invalid YouTube URL. Please check and try again." });
 
   const short = isShort(videoUrl);
 
+  // STEP 3: Cache check (cache hits don't count as attempts)
   const cacheKey = `${videoId}_${language}_${summaryType}`;
   const cached = summaryCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < CACHE_TTL) {
     analytics.cacheHits++;
-    console.log("[CACHE] Hit for", cacheKey);
     const cachedMusicWarning = cached.isMusicLike ? "This video appears to be music or low-dialogue content. Summary accuracy may be limited." : null;
-    return res.json({ success: true, summary: cached.summary, title: cached.title, channel: cached.channel, sourceUsed: cached.sourceUsed, confidence: cached.confidence, isShort: short, isMusicLike: cached.isMusicLike, musicWarning: cachedMusicWarning, usage: { used: getUsageCount(clientIP), limit: DAILY_LIMIT }, fromCache: true });
+    return res.json({
+      success: true, summary: cached.summary, title: cached.title,
+      channel: cached.channel, sourceUsed: cached.sourceUsed,
+      confidence: cached.confidence, isShort: short,
+      isMusicLike: cached.isMusicLike, musicWarning: cachedMusicWarning,
+      usage: { used: getSuccessCount(clientIP), limit: DAILY_LIMIT }, fromCache: true
+    });
   }
 
+  // STEP 4: Start processing — count this attempt
+  incrementAttempt(clientIP);
   try {
     const videoInfo = await fetchVideoInfo(videoId);
-    console.log("[VIDEO INFO]", videoInfo.title);
-
     const result = await fetchTranscript(videoId);
 
     if (!result) {
       analytics.transcriptNotFound++;
       if (short) {
         analytics.shortsRejected++;
-        console.log("[SHORTS] No transcript for short");
-        return res.status(404).json({ success: false, code: "transcript_not_found", error: "This YouTube Short does not have enough transcript data to generate a reliable summary.", isShort: true });
+        return res.status(404).json({
+          success: false, code: "transcript_not_found",
+          error: "This YouTube Short does not have enough transcript data to generate a reliable summary.",
+          isShort: true
+        });
       }
-      console.log("[TRANSCRIPT] Not found for", videoId);
-      return res.status(404).json({ success: false, code: "transcript_not_found", error: "No transcript found for this video. The video may not have captions enabled." });
+      return res.status(404).json({
+        success: false, code: "transcript_not_found",
+        error: "No transcript found for this video. The video may not have captions enabled."
+      });
     }
 
     const { text: transcript, source: sourceUsed } = result;
 
+    // Update analytics
     if (sourceUsed === "supadata") analytics.supadataHits++;
     else if (sourceUsed === "rapid_solid") analytics.rapid1Hits++;
     else if (sourceUsed === "rapid_leadxpert") analytics.rapid2Hits++;
@@ -503,70 +413,74 @@ app.post("/api/summarize", async (req, res) => {
     else if (sourceUsed === "rapid_wavalidat") analytics.rapid6Hits++;
 
     const quality = getTranscriptQuality(transcript);
-    console.log("[QUALITY]", quality, "| length:", transcript.length);
-
     if (quality === "low") {
       analytics.notEnoughData++;
-      console.log("[QUALITY] Rejected as low quality");
-      return res.status(422).json({ success: false, code: "not_enough_data", error: "Not enough transcript data available for an accurate summary." });
+      return res.status(422).json({
+        success: false, code: "not_enough_data",
+        error: "Not enough transcript data available for an accurate summary."
+      });
     }
 
     const musicLike = isMusicLike(videoInfo.title, transcript);
-    console.log("[MUSIC LIKE]", musicLike);
-
     let summary = null;
+
     try {
-      console.log("[GEMINI] Calling API...");
       summary = await Promise.race([
         summarizeFromTranscript(transcript, language, summaryType),
         new Promise((_, r) => setTimeout(() => r(new Error("TIMEOUT")), 30000))
       ]);
-      console.log("[GEMINI] Response length:", summary ? summary.length : 0);
     } catch (err) {
-      if (err.message === "TIMEOUT") {
-        console.error("[GEMINI] Timed out");
-        return res.status(504).json({ success: false, code: "summary_timeout", error: "Summary generation timed out. Please try again." });
-      }
-      console.error("[GEMINI] Failed:", err.message);
+      if (err.message === "TIMEOUT") return res.status(504).json({ success: false, code: "summary_timeout", error: "Summary generation timed out. Please try again." });
       analytics.geminiFails++;
-      return res.status(500).json({ success: false, code: "server_error", error: "Summary generation failed. Please try again." });
+      console.error("[ERROR] Gemini failed:", err.message);
+      return res.status(500).json({ success: false, code: "server_error", error: "AI failed to generate a reliable summary. Try another video." });
     }
 
     if (!summary || !isValidSummary(summary)) {
       analytics.geminiFails++;
-      console.log("[GEMINI] Invalid summary — too short or filler");
       return res.status(422).json({ success: false, code: "not_enough_data", error: "Not enough transcript data available for an accurate summary." });
     }
 
     const confidence = getConfidence(quality);
 
+    // Only cache successful summaries
     if (summaryCache.size >= MAX_CACHE_ENTRIES) summaryCache.delete(summaryCache.keys().next().value);
-    summaryCache.set(cacheKey, { summary, title: videoInfo.title, channel: videoInfo.channel, sourceUsed, confidence, isMusicLike: musicLike, createdAt: Date.now() });
+    summaryCache.set(cacheKey, {
+      summary, title: videoInfo.title, channel: videoInfo.channel,
+      sourceUsed, confidence, isMusicLike: musicLike, createdAt: Date.now()
+    });
 
+    // Increment success count ONLY on successful summary
     analytics.successfulSummaries++;
-    incrementUsage(clientIP);
-    console.log("[SUCCESS]", videoId, "via", sourceUsed, "| confidence:", confidence);
+    incrementSuccess(clientIP);
 
     const musicWarning = musicLike ? "This video appears to be music or low-dialogue content. Summary accuracy may be limited." : null;
 
-    return res.json({ success: true, summary, title: videoInfo.title, channel: videoInfo.channel, sourceUsed, confidence, isShort: short, isMusicLike: musicLike, musicWarning, usage: { used: getUsageCount(clientIP), limit: DAILY_LIMIT } });
+    console.log(`[SUCCESS] videoId: ${videoId} | source: ${sourceUsed} | confidence: ${confidence}`);
+
+    return res.json({
+      success: true, summary, title: videoInfo.title, channel: videoInfo.channel,
+      sourceUsed, confidence, isShort: short, isMusicLike: musicLike, musicWarning,
+      usage: { used: getSuccessCount(clientIP), limit: DAILY_LIMIT }
+    });
 
   } catch (err) {
-    console.error("[UNHANDLED ERROR]", err.message, err.stack);
+    console.error("[ERROR] Unhandled:", err.message);
     analytics.geminiFails++;
     return res.status(500).json({ success: false, code: "server_error", error: "Something went wrong. Please try again." });
   }
 });
 
-app.get("/api/usage", (req, res) => res.json({ used: getUsageCount(getClientIP(req)), limit: DAILY_LIMIT }));
+app.get("/api/usage", (req, res) => res.json({ used: getSuccessCount(getClientIP(req)), limit: DAILY_LIMIT }));
+
 app.get("/api/stats", (req, res) => {
   const clientIP = getClientIP(req);
-  // Only allow localhost or Render internal
   if (clientIP !== "127.0.0.1" && clientIP !== "::1" && !clientIP.startsWith("10.")) {
     return res.status(403).json({ error: "Forbidden" });
   }
   res.json({ ...analytics, cacheSize: summaryCache.size });
 });
+
 app.get("/", (req, res) => res.send("Sumora Backend Running!"));
 
 process.on("uncaughtException", err => console.error("[UNCAUGHT]", err.message));
