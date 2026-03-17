@@ -14,7 +14,7 @@
   <meta name="twitter:title" content="Sumora — AI YouTube Summarizer">
   <meta name="twitter:description" content="Summarize any YouTube video in seconds. Free.">
   <!-- Inline SVG Favicon -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23a855f7'/><stop offset='100%25' stop-color='%234169e1'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><rect x='8' y='10' width='16' height='2.5' rx='1.25' fill='white' opacity='0.95'/><rect x='8' y='14.75' width='11' height='2.5' rx='1.25' fill='white' opacity='0.7'/><rect x='8' y='19.5' width='14' height='2.5' rx='1.25' fill='white' opacity='0.85'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236d28d9'/><stop offset='100%25' stop-color='%233b5fd4'/></linearGradient><linearGradient id='sg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23f0abfc'/><stop offset='100%25' stop-color='%23ffffff'/></linearGradient><filter id='glow'><feGaussianBlur stdDeviation='1' result='blur'/><feMerge><feMergeNode in='blur'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs><rect width='32' height='32' rx='9' fill='url(%23bg)'/><text x='16' y='23' font-family='Georgia,serif' font-size='22' font-weight='700' fill='url(%23sg)' text-anchor='middle' filter='url(%23glow)' letter-spacing='-1'>S</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -853,7 +853,7 @@
     const badgesEl = document.getElementById('badges');
     badgesEl.innerHTML = '';
     if (data.sourceUsed) {
-      badgesEl.innerHTML += `<span class="badge badge-source">Verified Transcript</span>`;
+      badgesEl.innerHTML += `<span class="badge badge-source">Transcript Verified</span>`;
     }
     if (data.confidence) {
       const cls = data.confidence === 'High' ? 'badge-high' : data.confidence === 'Medium' ? 'badge-medium' : 'badge-low';
