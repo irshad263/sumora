@@ -9,9 +9,10 @@ const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const PORT = process.env.PORT || 5000;
 
 const app = express();
+app.disable("x-powered-by"); // Hide server info
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10kb" })); // Limit body size
 app.use(express.static("public"));
 
 // ── CONSTANTS ──────────────────────────────────────────────
@@ -24,6 +25,7 @@ const MIN_TRANSCRIPT_LENGTH = 150;
 // ── MAPS ───────────────────────────────────────────────────
 const successMap = new Map();
 const attemptMap = new Map();
+const processingSet = new Set();
 const summaryCache = new Map();
 
 // ── CLEANUP ────────────────────────────────────────────────
@@ -343,7 +345,7 @@ app.post("/api/summarize", async (req, res) => {
     });
   }
 
-  // STEP 2: Check attempt limit (anti-spam — prevents Shorts/fail spam)
+  // STEP 2: Check attempt limit (anti-spam)
   if (isAttemptLimitReached(clientIP)) {
     return res.status(429).json({
       success: false, code: "rate_limit",
@@ -352,12 +354,14 @@ app.post("/api/summarize", async (req, res) => {
     });
   }
 
-  // STEP 3: Validate inputs
+  // STEP 4: Strict input validation
   if (!GEMINI_API_KEY) return res.status(500).json({ success: false, code: "server_error", error: "Server misconfigured." });
 
   const { videoUrl, language = "English", summaryType = "short" } = req.body;
 
-  if (!videoUrl) return res.status(400).json({ success: false, code: "invalid_url", error: "Please provide a YouTube URL." });
+  if (!videoUrl || typeof videoUrl !== "string" || videoUrl.length > 200) {
+    return res.status(400).json({ success: false, code: "invalid_url", error: "Please provide a valid YouTube URL." });
+  }
 
   const videoId = extractVideoId(videoUrl);
   if (!videoId) return res.status(400).json({ success: false, code: "invalid_url", error: "Invalid YouTube URL. Please check and try again." });
@@ -378,6 +382,15 @@ app.post("/api/summarize", async (req, res) => {
       usage: { used: getSuccessCount(clientIP), limit: DAILY_LIMIT }, fromCache: true
     });
   }
+
+  // STEP 5: Prevent duplicate processing of same video
+  if (processingSet.has(cacheKey)) {
+    return res.status(429).json({
+      success: false, code: "rate_limit",
+      error: "Already processing this video. Please wait a moment."
+    });
+  }
+  processingSet.add(cacheKey);
 
   // STEP 4: Start processing — count this attempt
   incrementAttempt(clientIP);
@@ -457,7 +470,7 @@ app.post("/api/summarize", async (req, res) => {
     const musicWarning = musicLike ? "This video appears to be music or low-dialogue content. Summary accuracy may be limited." : null;
 
     console.log(`[SUCCESS] videoId: ${videoId} | source: ${sourceUsed} | confidence: ${confidence}`);
-
+    processingSet.delete(cacheKey);
     return res.json({
       success: true, summary, title: videoInfo.title, channel: videoInfo.channel,
       sourceUsed, confidence, isShort: short, isMusicLike: musicLike, musicWarning,
@@ -466,6 +479,7 @@ app.post("/api/summarize", async (req, res) => {
 
   } catch (err) {
     console.error("[ERROR] Unhandled:", err.message);
+    processingSet.delete(cacheKey);
     analytics.geminiFails++;
     return res.status(500).json({ success: false, code: "server_error", error: "Something went wrong. Please try again." });
   }
